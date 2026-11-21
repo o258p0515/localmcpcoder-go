@@ -96,6 +96,31 @@ if (errors.length) {
   process.exit(1);
 }
 
+function hasEnabledAccounts(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+    && Object.values(value).some(account => account?.token && String(account.token).trim() && account.enabled !== false);
+}
+async function fetchRtdbAccounts(url, accessToken) {
+  const primary = new URL(url);
+  if (accessToken) primary.searchParams.set("access_token", accessToken);
+  let response = await fetch(primary);
+  if (!response.ok) throw new Error("RTDB live check failed (HTTP " + response.status + ")");
+  let data = await response.json();
+  let selectedPath = primary.pathname;
+  if (!hasEnabledAccounts(data) && primary.pathname === "/github_accounts.json") {
+    const envUrl = new URL(primary);
+    envUrl.pathname = "/env/github_accounts.json";
+    const envResponse = await fetch(envUrl);
+    if (envResponse.ok) {
+      const envData = await envResponse.json();
+      if (hasEnabledAccounts(envData)) {
+        data = envData;
+        selectedPath = envUrl.pathname;
+      }
+    }
+  }
+  return { data, selectedPath };
+}
 function describeRtdbValue(value) {
   if (value === null) return "null (node does not exist or is empty)";
   if (Array.isArray(value)) return "array";
@@ -162,27 +187,23 @@ try {
     });
     if (!tokenResponse.ok) throw new Error("Firebase Service Account OAuth validation failed (HTTP " + tokenResponse.status + ")");
     const tokenData = await tokenResponse.json();
-    const url = new URL(rtdbUrl);
-    url.searchParams.set("access_token", tokenData.access_token);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error("RTDB live check failed (HTTP " + response.status + ")");
-    const data = await response.json();
-    if (!data || typeof data !== "object" || !Object.values(data).some(account => account?.token && account.enabled !== false)) {
+    const { data, selectedPath } = await fetchRtdbAccounts(rtdbUrl, tokenData.access_token);
+    if (!hasEnabledAccounts(data)) {
       const rootKeys = await nodeChildNames(rtdbUrl, "/", tokenData.access_token);
       const envKeys = rootKeys.split(",").includes("env") ? await nodeChildNames(rtdbUrl, "/env", tokenData.access_token) : "not-present";
       throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]; /env child names: [" + envKeys + "]. Expected /github_accounts or /env/github_accounts with child records containing token and enabled fields.");
     }
     enabledAccounts = Object.values(data).filter(account => account?.token && account.enabled !== false).length;
+    console.log("[RTDB] Using account node " + selectedPath + ".");
   } else {
-    const response = await fetch(rtdbUrl);
-    if (!response.ok) throw new Error("RTDB fallback live check failed (HTTP " + response.status + ")");
-    const data = await response.json();
-    if (!data || typeof data !== "object" || !Object.values(data).some(account => account?.token && account.enabled !== false)) {
+    const { data, selectedPath } = await fetchRtdbAccounts(rtdbUrl);
+    if (!hasEnabledAccounts(data)) {
       const rootKeys = await nodeChildNames(rtdbUrl, "/");
       const envKeys = rootKeys.split(",").includes("env") ? await nodeChildNames(rtdbUrl, "/env") : "not-present";
       throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]; /env child names: [" + envKeys + "]. Expected /github_accounts or /env/github_accounts with child records containing token and enabled fields.");
     }
     enabledAccounts = Object.values(data).filter(account => account?.token && account.enabled !== false).length;
+    console.log("[RTDB] Using account node " + selectedPath + ".");
   }
 
   console.log("[PRE-FLIGHT CHECK PASSED] Cloudflare zone verified; RTDB mode=" + (mode || "legacy_auth_fallback") + "; enabled accounts=" + enabledAccounts + ". Secrets were not printed.");

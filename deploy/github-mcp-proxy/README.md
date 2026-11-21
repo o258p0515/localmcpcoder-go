@@ -12,7 +12,7 @@ A Cloudflare Worker that proxies the official GitHub Remote MCP endpoint and sel
 
 ## Firebase RTDB setup
 
-Create a JSON object at /github_accounts. Example (replace placeholders with real PATs; never commit them):
+Create a JSON object at /github_accounts. If your Firebase project groups data under an env node, /env/github_accounts is also supported automatically when the direct node is empty. Example (replace placeholders with real PATs; never commit them):
 
     {
       "personal": {
@@ -45,7 +45,7 @@ Encode the Firebase Service Account JSON file as one-line Base64:
 
 The deployment workflow uses these preconfigured secrets: CF_API_EMAIL, CF_API_KEY, CF_DOMAIN, MCP_TOKEN, MCP_OAUTH_CLIENT_ID, MCP_OAUTH_CLIENT_SECRET, MCP_OAUTH_REDIRECT_URIS, TS_TRUST_CREDS, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT_JSON_B64, RTDB_URL, and RTDB_AUTH_URL.
 
-Runtime Firebase auth priority: FIREBASE_SERVICE_ACCOUNT_JSON_B64 → FIREBASE_SERVICE_ACCOUNT_JSON → fallback RTDB_AUTH_URL. When using Service Account, set RTDB_URL to the clean URL ending in /github_accounts.json. Otherwise RTDB_AUTH_URL must include ?auth=....
+Runtime Firebase auth priority: FIREBASE_SERVICE_ACCOUNT_JSON_B64 → FIREBASE_SERVICE_ACCOUNT_JSON → fallback RTDB_AUTH_URL. When using Service Account, set RTDB_URL to the clean URL ending in /github_accounts.json (the Worker also checks /env/github_accounts.json if the direct node is empty). Otherwise RTDB_AUTH_URL must include ?auth=....
 
 MCP_OAUTH_REDIRECT_URIS and TS_TRUST_CREDS are deliberately ignored and never sent to the Worker. OAuth accepts any syntactically valid redirect URI except javascript:, data:, vbscript: schemes and URIs with fragments. No redirect allowlist is required.
 

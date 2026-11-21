@@ -78,4 +78,4 @@ jobs:
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' | tee /tmp/mcp-tools.json | grep -q 'list_github_accounts'
           grep -q '"account"' /tmp/mcp-tools.json
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}' | grep -q 'isError'
-# Keep this workflow coupled to the proxy deployment folder.
+# Deploy also validates the user's Firebase RTDB environment node.

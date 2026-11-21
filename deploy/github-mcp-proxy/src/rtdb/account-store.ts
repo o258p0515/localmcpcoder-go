@@ -17,6 +17,14 @@ function normalizeDbUrl(raw: string, removeAuth = false): string {
   return url.toString();
 }
 
+function hasEnabledAccounts(raw: unknown): boolean {
+  return !!raw && typeof raw === "object" && !Array.isArray(raw)
+    && Object.values(raw).some(value => {
+      const account = value as Partial<RtdbAccount> | null;
+      return !!account && typeof account.token === "string" && !!account.token.trim() && account.enabled !== false;
+    });
+}
+
 function normalize(raw: unknown): Record<string, RtdbAccount> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("RTDB github_accounts node must be a JSON object");
   const out: Record<string, RtdbAccount> = {};
@@ -67,10 +75,23 @@ export async function getAccounts(env: Env, options: { forceRefresh?: boolean } 
     if (!new URL(url).searchParams.get("auth")) throw new Error("RTDB_AUTH_URL must include ?auth= when Service Account credentials are not configured");
   }
 
-  const response = await fetch(url, { headers });
+  let response = await fetch(url, { headers });
   if (!response.ok) throw new Error("Firebase RTDB request failed (HTTP " + response.status + ")");
-  const accounts = normalize(await response.json());
-  if (!Object.values(accounts).some(account => account.enabled)) throw new Error("Firebase RTDB contains no enabled GitHub account with a token");
+  let raw: unknown = await response.json();
+  if (!hasEnabledAccounts(raw) && new URL(url).pathname === "/github_accounts.json") {
+    const envUrl = new URL(url);
+    envUrl.pathname = "/env/github_accounts.json";
+    const envResponse = await fetch(envUrl, { headers });
+    if (envResponse.ok) {
+      const envRaw: unknown = await envResponse.json();
+      if (hasEnabledAccounts(envRaw)) {
+        raw = envRaw;
+        url = envUrl.toString();
+      }
+    }
+  }
+  const accounts = normalize(raw);
+  if (!Object.values(accounts).some(account => account.enabled)) throw new Error("Firebase RTDB contains no enabled GitHub account with a token at /github_accounts or /env/github_accounts");
 
   memory = { accounts, expires: Date.now() + ttl * 1000 };
   await env.CACHE_KV.put("rtdb:accounts:v1", await encryptAesGcm(JSON.stringify(accounts), env.MCP_TOKEN), { expirationTtl: ttl });

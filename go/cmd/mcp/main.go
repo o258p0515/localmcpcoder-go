@@ -42,13 +42,13 @@ func main() {
 	}
 	p, e := tunnel.Select(mode)
 	if e != nil { log.Fatal(e) }
-	public, stopTunnel, e := p.Start(ctx, tunnel.Config{Host: cfg.Host, Port: cfg.Port, Provider: mode, TSHostname: cfg.TSHostname, TSMode: cfg.TSMode}, addr)
+	public, stopTunnel, e := p.Start(ctx, tunnel.Config{Host: cfg.Host, Port: cfg.Port, Provider: mode, TSHostname: cfg.TSHostname, TSMode: cfg.TSMode, TSTag: cfg.TSTag}, addr)
 	if e != nil { _ = httpSrv.Close(); log.Fatal(e) }
 	var stopTailscale func() error
 	// Keep Cloudflare as the public endpoint while also joining the machine to
 	// the private tailnet. Trust Credential exchange happens inside this Go process.
 	if mode != "tailscale" && os.Getenv("TS_TRUST_CREDS") != "" {
-		tsPublic, tsStop, tsErr := (tunnel.Tailscale{}).Start(ctx, tunnel.Config{Port: cfg.Port, TSHostname: cfg.TSHostname, TSMode: "serve"}, addr)
+		tsPublic, tsStop, tsErr := (tunnel.Tailscale{}).Start(ctx, tunnel.Config{Port: cfg.Port, TSHostname: cfg.TSHostname, TSMode: "serve", TSTag: cfg.TSTag}, addr)
 		if tsErr != nil { if stopTunnel != nil { _ = stopTunnel() }; _ = httpSrv.Close(); log.Fatalf("Tailscale setup failed: %v", tsErr) }
 		stopTailscale = tsStop
 		log.Printf("Tailscale node joined; private endpoint: %s", tsPublic)

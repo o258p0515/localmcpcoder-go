@@ -1,0 +1,19 @@
+{
+  "name": "github-mcp-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "__CF_ACCOUNT_ID__",
+  "routes": [{ "pattern": "__CF_DOMAIN__", "custom_domain": true }],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://__CF_DOMAIN__",
+    "GITHUB_MCP_UPSTREAM_URL": "https://api.githubcopilot.com/mcp/",
+    "RTDB_CACHE_TTL_SECONDS": "300"
+  },
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "__OAUTH_KV_ID__" },
+    { "binding": "CACHE_KV", "id": "__CACHE_KV_ID__" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "SSE_SESSIONS", "class_name": "SseSessionDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SseSessionDO"] }]
+}

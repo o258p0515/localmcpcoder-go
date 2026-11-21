@@ -1,0 +1,34 @@
+import {createSign} from "node:crypto";
+const e=process.env,errors=[],warnings=[];
+const add=(name,reason,fix,example)=>errors.push({name,reason,fix,example});
+const email=e.CF_API_EMAIL||"",key=e.CF_API_KEY||"",domain=e.CF_DOMAIN||"",token=e.MCP_TOKEN||"";
+if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))add("CF_API_EMAIL","Thiếu hoặc sai định dạng email.","Nhập email Cloudflare dùng cho Global API Key.","dev@example.com");
+if(key.length<30||/\s/.test(key))add("CF_API_KEY","Global API Key thiếu hoặc không hợp lệ.","Tạo Global API Key đủ quyền Zone Read, DNS Read/Edit và Workers KV Edit.","<Cloudflare Global API Key>");
+if(!/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(domain))add("CF_DOMAIN","Phải là hostname thuần, không có scheme/path/port.","Nhập domain đã active trong Cloudflare.","github-mcp.example.com");
+if(token.length<24||/\s/.test(token))add("MCP_TOKEN","Token bắt buộc, tối thiểu 24 ký tự và không có whitespace.","Tạo token ngẫu nhiên dài ít nhất 32 bytes.","mcp_live_<random-secret>");
+if(e.MCP_OAUTH_CLIENT_ID&&!/^[A-Za-z0-9._-]{8,128}$/.test(e.MCP_OAUTH_CLIENT_ID))add("MCP_OAUTH_CLIENT_ID","Client ID sai định dạng.","Dùng 8-128 ký tự chữ/số/._-.","github-mcp-proxy-client");
+if(e.MCP_OAUTH_CLIENT_ID&&(!e.MCP_OAUTH_CLIENT_SECRET||e.MCP_OAUTH_CLIENT_SECRET.length<24||/\s/.test(e.MCP_OAUTH_CLIENT_SECRET)))add("MCP_OAUTH_CLIENT_SECRET","Khi có client ID, secret phải dài ít nhất 24 ký tự.","Tạo client secret mới.","<OAuth client secret>");
+let mode="";let sa=null;
+try {
+ if(e.FIREBASE_SERVICE_ACCOUNT_JSON_B64?.trim()){const s=e.FIREBASE_SERVICE_ACCOUNT_JSON_B64.replace(/\s/g,"").replace(/-/g,"+").replace(/_/g,"/");if(!/^[A-Za-z0-9+/]*={0,2}$/.test(s))throw Error("Base64 có ký tự không hợp lệ");sa=JSON.parse(Buffer.from(s,"base64").toString("utf8"));mode="service_account_b64";}
+ else if(e.FIREBASE_SERVICE_ACCOUNT_JSON?.trim()){sa=JSON.parse(e.FIREBASE_SERVICE_ACCOUNT_JSON);mode="service_account_json";}
+ if(sa&&(sa.type!=="service_account"||!String(sa.client_email).includes("@")||!String(sa.private_key).includes("BEGIN PRIVATE KEY")))throw Error("JSON không phải Service Account đầy đủ");
+}catch(err){add(e.FIREBASE_SERVICE_ACCOUNT_JSON_B64?.trim()?"FIREBASE_SERVICE_ACCOUNT_JSON_B64":"FIREBASE_SERVICE_ACCOUNT_JSON",err.message+"; giá trị bí mật không được in ra log.","Tạo lại Base64 một dòng từ Service Account JSON.","Linux: base64 -w 0 service-account.json | macOS: base64 -i service-account.json | tr -d '\\n' | PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('service-account.json'))");}
+let rawUrl=e.RTDB_AUTH_URL?.trim()||"";if(sa){rawUrl=e.RTDB_URL?.trim()||"";if(!rawUrl&&e.RTDB_AUTH_URL?.trim()){try{const clean=new URL(e.RTDB_AUTH_URL.trim());clean.searchParams.delete("auth");rawUrl=clean.toString();}catch{rawUrl="";}}}
+try{const u=new URL(rawUrl);if(u.protocol!=="https:"||!(/\.(firebaseio\.com|firebasedatabase\.app)$/.test(u.hostname))||!u.pathname.endsWith(".json"))throw Error("RTDB URL phải HTTPS, host Firebase và path kết thúc .json");if(!sa&&!u.searchParams.get("auth"))throw Error("Fallback URL phải có ?auth= khi không có Service Account");}
+catch(err){add("RTDB_URL / RTDB_AUTH_URL",err.message,"Nhập URL RTDB trỏ tới node /github_accounts.json; nếu dùng service account hãy ưu tiên RTDB_URL sạch.","https://project-default-rtdb.asia-southeast1.firebasedatabase.app/github_accounts.json");}
+if(!sa&&!e.RTDB_AUTH_URL?.trim())add("Firebase RTDB authentication","Thiếu Service Account và RTDB_AUTH_URL fallback.","Thêm FIREBASE_SERVICE_ACCOUNT_JSON_B64 + RTDB_URL hoặc RTDB_AUTH_URL có ?auth=.","FIREBASE_SERVICE_ACCOUNT_JSON_B64 + RTDB_URL");
+if(errors.length){console.error("[PRE-FLIGHT CHECK FAILED] "+errors.length+" lỗi cấu hình:");errors.forEach((x,i)=>console.error((i+1)+". "+x.name+"\n   Nguyên nhân: "+x.reason+"\n   Cách sửa: "+x.fix+"\n   Ví dụ: "+x.example));process.exit(1);}
+async function cf(path){const r=await fetch("https://api.cloudflare.com/client/v4"+path,{headers:{"X-Auth-Email":email,"X-Auth-Key":key}});const d=await r.json();if(!r.ok||!d.success)throw Error("Cloudflare API validation failed (HTTP "+r.status+")");return d.result;}
+try{
+ const user=await cf("/user");if(!user)throw Error("Cloudflare credentials rejected");
+ const zones=await cf("/zones?per_page=50"),z=zones.filter(x=>x.status==="active"&&(domain===x.name||domain.endsWith("."+x.name))).sort((a,b)=>b.name.length-a.name.length)[0];if(!z)throw Error("No active Cloudflare zone matches CF_DOMAIN");
+ const dns=await cf("/zones/"+z.id+"/dns_records?name="+encodeURIComponent(domain));if(dns.some(x=>["A","AAAA","CNAME"].includes(x.type)))warnings.push("DNS records already exist for CF_DOMAIN; verify compatibility before custom-domain attach.");
+ if(sa){
+  const now=Math.floor(Date.now()/1000),enc=o=>Buffer.from(JSON.stringify(o)).toString("base64url"),unsigned=enc({alg:"RS256",typ:"JWT"})+"."+enc({iss:sa.client_email,scope:"https://www.googleapis.com/auth/firebase.database https://www.googleapis.com/auth/userinfo.email",aud:sa.token_uri||"https://oauth2.googleapis.com/token",iat:now,exp:now+3600});
+  const sign=createSign("RSA-SHA256");sign.update(unsigned);const assertion=unsigned+"."+sign.sign(sa.private_key.replace(/\\n/g,"\n"),"base64url");
+  const tr=await fetch(sa.token_uri||"https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion})});if(!tr.ok)throw Error("Firebase Service Account OAuth validation failed (HTTP "+tr.status+")");
+  const td=await tr.json(),url=new URL(rawUrl);url.searchParams.delete("auth");url.searchParams.set("access_token",td.access_token);const rr=await fetch(url);if(!rr.ok)throw Error("RTDB live check failed (HTTP "+rr.status+")");const data=await rr.json();if(!data||typeof data!=="object"||!Object.values(data).some(a=>a?.token&&a.enabled!==false))throw Error("RTDB node has no enabled account with token");accountCount=Object.values(data).filter(a=>a?.token&&a.enabled!==false).length;
+ }else{const rr=await fetch(rawUrl);if(!rr.ok)throw Error("RTDB fallback live check failed (HTTP "+rr.status+")");const data=await rr.json();if(!data||typeof data!=="object"||!Object.values(data).some(a=>a?.token&&a.enabled!==false))throw Error("RTDB node has no enabled account with token");accountCount=Object.values(data).filter(a=>a?.token&&a.enabled!==false).length;}
+ console.log("[PRE-FLIGHT CHECK PASSED] Cloudflare zone verified; RTDB mode="+(mode||"legacy_auth_fallback")+"; enabled accounts="+accountCount+". Secrets were not printed.");warnings.forEach(w=>console.warn("WARNING: "+w));
+}catch(err){console.error("[PRE-FLIGHT CHECK FAILED] "+(err instanceof Error?err.message:"Live check failed")+"; credentials and RTDB values were redacted.");process.exit(1);}

@@ -5,3 +5,6 @@ dist/
 mcp
 .mcp-todos.json
 *.log
+# Keep the nested GitHub MCP proxy source directory tracked.
+!deploy/github-mcp-proxy/src/mcp/
+!deploy/github-mcp-proxy/src/mcp/**

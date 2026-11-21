@@ -1,0 +1,80 @@
+name: Deploy GitHub MCP Proxy
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/github-mcp-proxy/**'
+      - '.github/workflows/deploy-github-mcp-proxy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: github-mcp-proxy-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: deploy/github-mcp-proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deploy/github-mcp-proxy/package-lock.json
+      - name: Pre-flight validate environment
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
+          FIREBASE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON_B64 }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          RTDB_URL: ${{ secrets.RTDB_URL }}
+          RTDB_AUTH_URL: ${{ secrets.RTDB_AUTH_URL }}
+        run: node scripts/validate-env.mjs
+      - name: Install dependencies, typecheck and test
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+      - name: Prepare Cloudflare infrastructure
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+        run: node scripts/prepare-deploy.mjs
+      - name: Deploy Worker
+        run: npx wrangler deploy --config wrangler.deploy.jsonc
+      - name: Sync runtime secrets
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
+          RTDB_URL: ${{ secrets.RTDB_URL }}
+          RTDB_AUTH_URL: ${{ secrets.RTDB_AUTH_URL }}
+          FIREBASE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON_B64 }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.deploy.jsonc
+      - name: Post-deploy smoke tests
+        env:
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          BASE="https://$CF_DOMAIN"
+          sleep 5
+          curl --fail --silent --show-error "$BASE/health" | grep -q '"status":"ok"'
+          curl --fail --silent --show-error "$BASE/.well-known/oauth-authorization-server" | grep -q '"registration_endpoint"'
+          STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' -D /tmp/mcp-unauth-headers -X POST "$BASE/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+          test "$STATUS" = "401"
+          grep -qi 'WWW-Authenticate: Bearer resource_metadata=' /tmp/mcp-unauth-headers
+          curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' | grep -q 'github-mcp-proxy'
+          curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' | tee /tmp/mcp-tools.json | grep -q 'list_github_accounts'
+          grep -q '"account"' /tmp/mcp-tools.json
+          curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}' | grep -q 'isError'

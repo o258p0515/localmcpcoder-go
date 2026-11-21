@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+wrangler.deploy.jsonc
+wrangler.dryrun.jsonc
+.dev.vars
+.env*
+service-account*.json\n*.pem\n

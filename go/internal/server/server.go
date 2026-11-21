@@ -21,7 +21,7 @@ type rpcResp struct { JSONRPC string `json:"jsonrpc"`; ID json.RawMessage `json:
 type Server struct { cfg config.Config; tools *tools.Registry; skills *skills.Store; oauth *auth.Service }
 func New(c config.Config,t *tools.Registry,sk *skills.Store)*Server{
  redirects:=strings.FieldsFunc(os.Getenv("MCP_OAUTH_REDIRECT_URIS"),func(r rune)bool{return r==','||r=='\n'||r==' '||r=='\t'})
- return &Server{cfg:c,tools:t,skills:sk,oauth:auth.NewWithOptions(auth.Options{Passphrase:c.Token,ClientID:os.Getenv("MCP_OAUTH_CLIENT_ID"),ClientSecret:os.Getenv("MCP_OAUTH_CLIENT_SECRET"),ClientName:envOr(os.Getenv("MCP_OAUTH_CLIENT_NAME"),"localmcpcoder pre-registered client"),RedirectURIs:redirects})}
+ return &Server{cfg:c,tools:t,skills:sk,oauth:auth.NewWithOptions(auth.Options{Passphrase:c.Token,ClientID:os.Getenv("MCP_OAUTH_CLIENT_ID"),ClientSecret:os.Getenv("MCP_OAUTH_CLIENT_SECRET"),ClientName:envOr(os.Getenv("MCP_OAUTH_CLIENT_NAME"),"localmcpcoder pre-registered client"),RedirectURIs:redirects,AllowAnyRedirect:true})}
 }
 func envOr(v,d string)string{if v!=""{return v};return d}
 func (s *Server) Handler()http.Handler{

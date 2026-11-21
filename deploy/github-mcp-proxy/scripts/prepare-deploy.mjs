@@ -18,11 +18,24 @@ if(!workersSubdomain){
 }else{
   console.error("Reusing the existing account workers.dev subdomain.");
 }
+async function hasManagedDns(hostname){
+  const records=await cf("/zones/"+zone.id+"/dns_records?name="+encodeURIComponent(hostname));
+  return records.some(record=>["A","AAAA","CNAME"].includes(record.type));
+}
+let workerDomain=domain;
+if(await hasManagedDns(workerDomain)){
+  const candidates=["github-mcp-proxy."+zone.name,"github-mcp-proxy-"+zone.account.id.slice(0,6).toLowerCase()+"."+zone.name];
+  const available=[];
+  for(const candidate of candidates){if(!await hasManagedDns(candidate)){available.push(candidate);break;}}
+  if(!available.length)throw new Error("CF_DOMAIN already has externally managed DNS records and no free proxy hostname was found. Preserve existing DNS; choose an unused hostname in the same Cloudflare zone.");
+  workerDomain=available[0];
+  console.error("CF_DOMAIN already has DNS records; preserving them and using a separate Worker hostname.");
+}
 const namespaces=await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces?per_page=100");
 async function ensure(title){const found=namespaces.find(x=>x.title===title);if(found)return found.id;return (await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces",{method:"POST",body:JSON.stringify({title})})).id;}
 const oauth=await ensure("github-mcp-oauth-kv"),cache=await ensure("github-mcp-cache-kv");
 let cfg=await readFile(new URL("../wrangler.jsonc",import.meta.url),"utf8");
-cfg=cfg.replaceAll("__CF_ACCOUNT_ID__",zone.account.id).replaceAll("__CF_DOMAIN__",domain).replaceAll("__OAUTH_KV_ID__",oauth).replaceAll("__CACHE_KV_ID__",cache);
+cfg=cfg.replaceAll("__CF_ACCOUNT_ID__",zone.account.id).replaceAll("__CF_DOMAIN__",workerDomain).replaceAll("__OAUTH_KV_ID__",oauth).replaceAll("__CACHE_KV_ID__",cache);
 await writeFile(new URL("../wrangler.deploy.jsonc",import.meta.url),cfg);
-if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,"CLOUDFLARE_ACCOUNT_ID="+zone.account.id+"\nCLOUDFLARE_API_KEY="+key+"\nCLOUDFLARE_EMAIL="+email+"\n");
-console.error("Prepared Cloudflare deployment config; account and credentials are not printed.");
+if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,"CLOUDFLARE_ACCOUNT_ID="+zone.account.id+"\nCLOUDFLARE_API_KEY="+key+"\nCLOUDFLARE_EMAIL="+email+"\nWORKER_DOMAIN="+workerDomain+"\n");
+console.error("Prepared Cloudflare deployment config for "+workerDomain+"; account and credentials are not printed.");

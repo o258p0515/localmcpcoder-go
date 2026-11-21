@@ -63,11 +63,10 @@ jobs:
         run: node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.deploy.jsonc
       - name: Post-deploy smoke tests
         env:
-          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
-          BASE="https://$CF_DOMAIN"
+          BASE="https://$WORKER_DOMAIN"
           sleep 5
           curl --fail --silent --show-error "$BASE/health" | grep -q '"status":"ok"'
           curl --fail --silent --show-error "$BASE/.well-known/oauth-authorization-server" | grep -q '"registration_endpoint"'
@@ -78,4 +77,4 @@ jobs:
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' | tee /tmp/mcp-tools.json | grep -q 'list_github_accounts'
           grep -q '"account"' /tmp/mcp-tools.json
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}' | grep -q 'isError'
-# Ensure account workers.dev provisioning runs before deployment.
+# Deploy the proxy on a dedicated hostname without altering existing DNS records.

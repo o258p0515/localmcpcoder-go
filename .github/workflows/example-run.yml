@@ -46,13 +46,6 @@ jobs:
           cd go
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64" ./cmd/mcp
 
-      - name: Join Tailscale tailnet
-        uses: tailscale/github-action@v4
-        with:
-          authkey: ${{ secrets.TS_TRUST_CREDS }}
-          hostname: localmcpcoder-gha
-          version: latest
-
       - name: Provision Cloudflare named tunnel and DNS with Global API Key
         id: cloudflare
         env:
@@ -137,6 +130,8 @@ jobs:
           MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
           MCP_OAUTH_REDIRECT_URIS: ${{ secrets.MCP_OAUTH_REDIRECT_URIS }}
           TUNNEL_TOKEN: ${{ steps.cloudflare.outputs.tunnel_token }}
+          TS_TRUST_CREDS: ${{ secrets.TS_TRUST_CREDS }}
+          TS_TAGS: ${{ secrets.TS_TAGS }}
           MCP_HOST: ${{ steps.cloudflare.outputs.host }}
         run: |
           set -euo pipefail

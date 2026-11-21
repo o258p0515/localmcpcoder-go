@@ -105,10 +105,10 @@ function describeRtdbValue(value) {
   const fields = first && typeof first === "object" && !Array.isArray(first) ? Object.keys(first) : [];
   return "object with " + keys.length + " top-level entries; first-entry fields=[" + fields.slice(0, 20).join(",") + "]";
 }
-async function rootChildNames(url, accessToken) {
+async function nodeChildNames(url, nodePath, accessToken) {
   try {
     const root = new URL(url);
-    root.pathname = "/.json";
+    root.pathname = nodePath === "/" ? "/.json" : nodePath.replace(/\/+$/, "") + ".json";
     root.searchParams.set("shallow", "true");
     if (accessToken) root.searchParams.set("access_token", accessToken);
     const response = await fetch(root);
@@ -168,8 +168,9 @@ try {
     if (!response.ok) throw new Error("RTDB live check failed (HTTP " + response.status + ")");
     const data = await response.json();
     if (!data || typeof data !== "object" || !Object.values(data).some(account => account?.token && account.enabled !== false)) {
-      const rootKeys = await rootChildNames(rtdbUrl, tokenData.access_token);
-      throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]. Expected /github_accounts with child records containing token and enabled fields.");
+      const rootKeys = await nodeChildNames(rtdbUrl, "/", tokenData.access_token);
+      const envKeys = rootKeys.split(",").includes("env") ? await nodeChildNames(rtdbUrl, "/env", tokenData.access_token) : "not-present";
+      throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]; /env child names: [" + envKeys + "]. Expected /github_accounts or /env/github_accounts with child records containing token and enabled fields.");
     }
     enabledAccounts = Object.values(data).filter(account => account?.token && account.enabled !== false).length;
   } else {
@@ -177,8 +178,9 @@ try {
     if (!response.ok) throw new Error("RTDB fallback live check failed (HTTP " + response.status + ")");
     const data = await response.json();
     if (!data || typeof data !== "object" || !Object.values(data).some(account => account?.token && account.enabled !== false)) {
-      const rootKeys = await rootChildNames(rtdbUrl);
-      throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]. Expected /github_accounts with child records containing token and enabled fields.");
+      const rootKeys = await nodeChildNames(rtdbUrl, "/");
+      const envKeys = rootKeys.split(",").includes("env") ? await nodeChildNames(rtdbUrl, "/env") : "not-present";
+      throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]; /env child names: [" + envKeys + "]. Expected /github_accounts or /env/github_accounts with child records containing token and enabled fields.");
     }
     enabledAccounts = Object.values(data).filter(account => account?.token && account.enabled !== false).length;
   }

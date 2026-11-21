@@ -125,7 +125,7 @@ jobs:
           ROOT="$RUNNER_TEMP/mcp-root"
           mkdir -p "$ROOT"
           set +e
-          timeout --signal=TERM --kill-after=10s 5h45m \
+          timeout --signal=TERM --kill-after=10s 20700s \
             "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64" \
             --root "$ROOT" --tunnel cloudflare --host "$MCP_HOST"
           STATUS=$?

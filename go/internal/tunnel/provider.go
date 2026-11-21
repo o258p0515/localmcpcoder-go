@@ -4,7 +4,6 @@ import (
 	"context"
 	"bytes"
 	"io"
-	"net/url"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -64,13 +63,16 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  if !strings.HasPrefix(credential,"tskey-client-"){return fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>")}
  clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-")
  if !ok||clientID==""||secret==""{return fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")}
- form:=url.Values{"client_id":{clientID},"client_secret":{secret},"grant_type":{"client_credentials"},"scope":{"policy_file devices:core:read devices:posture_attributes"}}
+ form:=strings.NewReader("client_id="+url.QueryEscape(clientID)+"&client_secret="+url.QueryEscape(secret))
  reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  client:=&http.Client{Timeout:20*time.Second}
- tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",strings.NewReader(form.Encode()));if err!=nil{return err}
+ tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",form);if err!=nil{return err}
  tokenReq.Header.Set("Content-Type","application/x-www-form-urlencoded")
  tokenResp,err:=client.Do(tokenReq);if err!=nil{return fmt.Errorf("request OAuth token: %w",err)};defer tokenResp.Body.Close()
- if tokenResp.StatusCode<200||tokenResp.StatusCode>=300{return fmt.Errorf("Tailscale OAuth token endpoint returned HTTP %d; verify policy_file scope",tokenResp.StatusCode)}
+ if tokenResp.StatusCode<200||tokenResp.StatusCode>=300 {
+  detail,_:=io.ReadAll(io.LimitReader(tokenResp.Body,4096))
+  return fmt.Errorf("Tailscale OAuth token endpoint returned HTTP %d: %s",tokenResp.StatusCode,strings.TrimSpace(string(detail)))
+ }
  var tokenData map[string]json.RawMessage
  if err=json.NewDecoder(io.LimitReader(tokenResp.Body,1<<20)).Decode(&tokenData);err!=nil{return fmt.Errorf("decode OAuth token response: %w",err)}
  var accessToken string

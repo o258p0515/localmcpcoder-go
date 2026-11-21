@@ -2,6 +2,9 @@ package tunnel
 
 import (
 	"context"
+	"bytes"
+	"io"
+	"net/url"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,7 +15,7 @@ import (
 	"strings"
 	"time"
 )
-type Config struct { Host string; Port int; Provider string; TSHostname string; TSMode string; Verify bool }
+type Config struct { Host string; Port int; Provider string; TSHostname string; TSMode string; TSTag string; Verify bool }
 type Provider interface { Name()string; Start(context.Context,Config,string)(string,func()error,error) }
 func Select(name string)(Provider,error){switch name{case "none","":return none{},nil;case "cloudflare":return Cloudflare{},nil;case "tailscale":return Tailscale{},nil;default:return nil,fmt.Errorf("unknown tunnel provider %q",name)}}
 type none struct{}
@@ -21,6 +24,7 @@ func(none)Start(_ context.Context,_ Config,addr string)(string,func()error,error
 type Tailscale struct{}
 func(Tailscale)Name()string{return "tailscale"}
 func(Tailscale)Start(ctx context.Context,c Config,addr string)(public string,stop func()error,retErr error){
+ if strings.TrimSpace(os.Getenv("TS_TRUST_CREDS"))!="" { tags:=configuredTSTags(c.TSTag); if e:=ensureTailscalePolicyTags(ctx,tags);e!=nil{return "",nil,fmt.Errorf("prepare Tailscale policy tags: %w",e)} }
  bin,e:=resolveTailscaleBinary("tailscale","TAILSCALE_BIN");if e!=nil{return "",nil,e};if c.TSHostname==""{host,_:=os.Hostname();if host==""{host="localmcpcoder"};c.TSHostname="mcp-"+host};if c.TSMode==""{c.TSMode="funnel"};if c.TSMode!="funnel"&&c.TSMode!="serve"{return "",nil,fmt.Errorf("--ts-mode must be funnel or serve")};port:=c.Port;if port==0{port=8787};socket:="";var daemon *exec.Cmd;tempDir:="";startedDaemon:=false
  cleanup:=func(){if daemon!=nil&&daemon.Process!=nil{_=daemon.Process.Kill();_=daemon.Wait()};if tempDir!=""{_=os.RemoveAll(tempDir)}};defer func(){if retErr!=nil{cleanup()}}()
  command:=func(args ...string)*exec.Cmd{if socket!=""{args=append([]string{"--socket="+socket},args...)};c:=exec.CommandContext(ctx,bin,args...);c.Env=scrub(os.Environ());return c}
@@ -42,4 +46,55 @@ func tailscaleAuthKey(ctx context.Context) (string, error) {
 	credential := strings.TrimSpace(os.Getenv("TS_TRUST_CREDS"))
 	if !strings.HasPrefix(credential, "tskey-client-") { return "", fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>") }
 	return credential, nil
+}
+
+func configuredTSTags(value string) []string {
+ if strings.TrimSpace(value)=="" { value=os.Getenv("TS_TAG") }
+ if strings.TrimSpace(value)=="" { value=os.Getenv("TS_TAGS") }
+ if strings.TrimSpace(value)=="" { value="tag:localmcpcoder" }
+ raw:=strings.FieldsFunc(value,func(r rune)bool{return r==','||r==' '||r=='\n'||r=='\t'})
+ seen:=map[string]bool{}; out:=make([]string,0,len(raw))
+ for _,tag:=range raw { tag=strings.TrimSpace(tag); if tag=="" {continue}; if !strings.HasPrefix(tag,"tag:"){tag="tag:"+tag}; if !seen[tag]{seen[tag]=true;out=append(out,tag)} }
+ return out
+}
+
+func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
+ credential:=strings.TrimSpace(os.Getenv("TS_TRUST_CREDS"))
+ if !strings.HasPrefix(credential,"tskey-client-"){return fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>")}
+ clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-")
+ if !ok||clientID==""||secret==""{return fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")}
+ form:=url.Values{"client_id":{clientID},"client_secret":{secret},"grant_type":{"client_credentials"},"scope":{"policy_file"}}
+ reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
+ client:=&http.Client{Timeout:20*time.Second}
+ tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",strings.NewReader(form.Encode()));if err!=nil{return err}
+ tokenReq.Header.Set("Content-Type","application/x-www-form-urlencoded")
+ tokenResp,err:=client.Do(tokenReq);if err!=nil{return fmt.Errorf("request OAuth token: %w",err)};defer tokenResp.Body.Close()
+ if tokenResp.StatusCode<200||tokenResp.StatusCode>=300{return fmt.Errorf("Tailscale OAuth token endpoint returned HTTP %d; verify policy_file scope",tokenResp.StatusCode)}
+ var tokenData map[string]json.RawMessage
+ if err=json.NewDecoder(io.LimitReader(tokenResp.Body,1<<20)).Decode(&tokenData);err!=nil{return fmt.Errorf("decode OAuth token response: %w",err)}
+ var accessToken string
+ if raw:=tokenData["access_token"];len(raw)>0{_ = json.Unmarshal(raw,&accessToken)}
+ if accessToken==""{return fmt.Errorf("OAuth response did not contain access_token")}
+ apiURL:="https://api.tailscale.com/api/v2/tailnet/-/acl"
+ getReq,err:=http.NewRequestWithContext(reqCtx,http.MethodGet,apiURL,nil);if err!=nil{return err}
+ getReq.Header.Set("Authorization","Bearer "+accessToken);getReq.Header.Set("Accept","application/json")
+ getResp,err:=client.Do(getReq);if err!=nil{return fmt.Errorf("read tailnet policy: %w",err)}
+ body,readErr:=io.ReadAll(io.LimitReader(getResp.Body,4<<20));getResp.Body.Close()
+ if readErr!=nil{return readErr};if getResp.StatusCode!=http.StatusOK{return fmt.Errorf("read tailnet policy returned HTTP %d; verify policy_file read access",getResp.StatusCode)}
+ var policy map[string]json.RawMessage
+ if err=json.Unmarshal(body,&policy);err!=nil{return fmt.Errorf("parse tailnet policy JSON: %w",err)}
+ var owners map[string]json.RawMessage
+ if raw,exists:=policy["tagOwners"];exists{if err=json.Unmarshal(raw,&owners);err!=nil||owners==nil{return fmt.Errorf("tailnet policy tagOwners is not a JSON object")}}else{owners=map[string]json.RawMessage{}}
+ changed:=false
+ for _,tag:=range tags{if _,exists:=owners[tag];exists{continue};ownerJSON,_:=json.Marshal([]string{"autogroup:admin"});owners[tag]=ownerJSON;changed=true}
+ if !changed{return nil}
+ ownersJSON,err:=json.Marshal(owners);if err!=nil{return err};policy["tagOwners"]=ownersJSON
+ updated,err:=json.MarshalIndent(policy,"","  ");if err!=nil{return err}
+ etag:=getResp.Header.Get("ETag");if etag==""{return fmt.Errorf("tailnet policy response did not include ETag; refusing unsafe overwrite")}
+ postReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,apiURL,bytes.NewReader(updated));if err!=nil{return err}
+ postReq.Header.Set("Authorization","Bearer "+accessToken);postReq.Header.Set("Content-Type","application/json");postReq.Header.Set("If-Match",etag)
+ postResp,err:=client.Do(postReq);if err!=nil{return fmt.Errorf("write tailnet policy: %w",err)};defer postResp.Body.Close()
+ if postResp.StatusCode==http.StatusPreconditionFailed{return fmt.Errorf("tailnet policy changed concurrently (HTTP 412); restart to retry safely")}
+ if postResp.StatusCode<200||postResp.StatusCode>=300{return fmt.Errorf("write tailnet policy returned HTTP %d; verify policy_file write access",postResp.StatusCode)}
+ return nil
 }

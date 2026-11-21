@@ -60,10 +60,15 @@ func configuredTSTags(value string) []string {
 }
 
 func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
- credential:=strings.TrimSpace(os.Getenv("TS_TRUST_CREDS"))
+ credentialRaw:=os.Getenv("TS_TRUST_CREDS")
+ credential:=strings.TrimSpace(credentialRaw)
+ fmt.Fprintf(os.Stderr,"[tailscale] TS_TRUST_CREDS diagnostics: set=%t raw_length=%d trimmed_length=%d surrounding_whitespace=%t prefix_ok=%t\n",credentialRaw!="",len(credentialRaw),len(credential),credentialRaw!=credential,strings.HasPrefix(credential,"tskey-client-"))
  if !strings.HasPrefix(credential,"tskey-client-"){return fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>")}
  clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-")
  if !ok||clientID==""||secret==""{return fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")}
+ if strings.ContainsAny(clientID+secret,"\\r\\n\\t "){return fmt.Errorf("TS_TRUST_CREDS client ID or secret contains whitespace")}
+ fmt.Fprintf(os.Stderr,"[tailscale] TS_TRUST_CREDS format: client_id_present=true client_id=%s secret_present=true secret_length=%d; secret value redacted\n",clientID,len(secret))
+ fmt.Fprintf(os.Stderr,"[tailscale] Validating OAuth credential with Tailscale API; scopes are evaluated after authentication.\n")
  form:=url.Values{"client_id":{clientID},"client_secret":{secret}}
  reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  client:=&http.Client{Timeout:20*time.Second}
@@ -72,8 +77,10 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  tokenResp,err:=client.Do(tokenReq);if err!=nil{return fmt.Errorf("request OAuth token: %w",err)};defer tokenResp.Body.Close()
  if tokenResp.StatusCode<200||tokenResp.StatusCode>=300 {
   detail,_:=io.ReadAll(io.LimitReader(tokenResp.Body,4096))
+  fmt.Fprintf(os.Stderr,"[tailscale] OAuth credential validation: FAILED (HTTP %d); response=%s\n",tokenResp.StatusCode,strings.TrimSpace(string(detail)))
   return fmt.Errorf("Tailscale OAuth token endpoint returned HTTP %d: %s",tokenResp.StatusCode,strings.TrimSpace(string(detail)))
  }
+ fmt.Fprintf(os.Stderr,"[tailscale] OAuth credential validation: SUCCESS (HTTP %d); access token issued\n",tokenResp.StatusCode)
  var tokenData map[string]json.RawMessage
  if err=json.NewDecoder(io.LimitReader(tokenResp.Body,1<<20)).Decode(&tokenData);err!=nil{return fmt.Errorf("decode OAuth token response: %w",err)}
  var accessToken string
@@ -84,7 +91,8 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  getReq.Header.Set("Authorization","Bearer "+accessToken);getReq.Header.Set("Accept","application/json")
  getResp,err:=client.Do(getReq);if err!=nil{return fmt.Errorf("read tailnet policy: %w",err)}
  body,readErr:=io.ReadAll(io.LimitReader(getResp.Body,4<<20));getResp.Body.Close()
- if readErr!=nil{return readErr};if getResp.StatusCode!=http.StatusOK{return fmt.Errorf("read tailnet policy returned HTTP %d; verify policy_file read access",getResp.StatusCode)}
+ if readErr!=nil{return readErr};if getResp.StatusCode!=http.StatusOK{fmt.Fprintf(os.Stderr,"[tailscale] Tailnet policy read: FAILED (HTTP %d)\n",getResp.StatusCode);return fmt.Errorf("read tailnet policy returned HTTP %d; verify policy_file read access",getResp.StatusCode)}
+ fmt.Fprintf(os.Stderr,"[tailscale] Tailnet policy read: SUCCESS (HTTP %d)\n",getResp.StatusCode)
  var policy map[string]json.RawMessage
  if err=json.Unmarshal(body,&policy);err!=nil{return fmt.Errorf("parse tailnet policy JSON: %w",err)}
  var owners map[string]json.RawMessage
@@ -99,7 +107,7 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
   for _,owner:=range tagOwners{if owner=="autogroup:admin"{foundAdmin=true;break}}
   if !foundAdmin{tagOwners=append(tagOwners,"autogroup:admin");ownerJSON,_:=json.Marshal(tagOwners);owners[tag]=ownerJSON;changed=true}
  }
- if !changed{return nil}
+ if !changed{fmt.Fprintf(os.Stderr,"[tailscale] Tailnet policy already contains requested tagOwners; no update required\n");return nil}
  ownersJSON,err:=json.Marshal(owners);if err!=nil{return err};policy["tagOwners"]=ownersJSON
  updated,err:=json.MarshalIndent(policy,"","  ");if err!=nil{return err}
  etag:=getResp.Header.Get("ETag");if etag==""{return fmt.Errorf("tailnet policy response did not include ETag; refusing unsafe overwrite")}
@@ -107,6 +115,7 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  postReq.Header.Set("Authorization","Bearer "+accessToken);postReq.Header.Set("Content-Type","application/json");postReq.Header.Set("If-Match",etag)
  postResp,err:=client.Do(postReq);if err!=nil{return fmt.Errorf("write tailnet policy: %w",err)};defer postResp.Body.Close()
  if postResp.StatusCode==http.StatusPreconditionFailed{return fmt.Errorf("tailnet policy changed concurrently (HTTP 412); restart to retry safely")}
- if postResp.StatusCode<200||postResp.StatusCode>=300{return fmt.Errorf("write tailnet policy returned HTTP %d; verify policy_file write access",postResp.StatusCode)}
+ if postResp.StatusCode<200||postResp.StatusCode>=300{fmt.Fprintf(os.Stderr,"[tailscale] Tailnet policy update: FAILED (HTTP %d)\n",postResp.StatusCode);return fmt.Errorf("write tailnet policy returned HTTP %d; verify policy_file write access",postResp.StatusCode)}
+ fmt.Fprintf(os.Stderr,"[tailscale] Tailnet policy update: SUCCESS (HTTP %d)\n",postResp.StatusCode)
  return nil
 }

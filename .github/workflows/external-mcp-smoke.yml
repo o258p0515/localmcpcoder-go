@@ -1,0 +1,47 @@
+name: External MCP smoke test
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify public health and authenticated MCP initialize
+        env:
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in CF_DOMAIN MCP_TOKEN; do
+            if [ -z "${!name:-}" ]; then echo "::error::$name repository secret is required"; exit 1; fi
+          done
+          BASE="https://$CF_DOMAIN"
+          READY=0
+          for attempt in $(seq 1 90); do
+            if curl --connect-timeout 5 --max-time 10 --silent --show-error --fail "$BASE/health" -o "$RUNNER_TEMP/health.json"; then
+              READY=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$READY" -ne 1 ]; then
+            echo "::error::Public /health did not become ready within 180 seconds"
+            exit 1
+          fi
+          jq -e '.status == "ok"' "$RUNNER_TEMP/health.json" >/dev/null
+          echo "Public HTTPS health endpoint is reachable."
+          curl --connect-timeout 5 --max-time 20 --silent --show-error --fail \
+            -X POST "$BASE/mcp" \
+            -H "Authorization: Bearer $MCP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"external-smoke-test","version":"1.0"}}}' \
+            -o "$RUNNER_TEMP/mcp.json"
+          jq -e '.jsonrpc == "2.0" and .result.serverInfo.name == "localmcpcoder-go"' "$RUNNER_TEMP/mcp.json" >/dev/null
+          echo "PASS: external HTTPS MCP /mcp accepted Bearer auth and completed initialize."

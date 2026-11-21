@@ -46,7 +46,7 @@ func tailscaleAuthKey(ctx context.Context) (string, error) {
 	if key := strings.TrimSpace(os.Getenv("TS_AUTHKEY")); key != "" { return key, nil }
 	credential := strings.TrimSpace(os.Getenv("TS_TRUST_CREDS"))
 	if !strings.HasPrefix(credential, "tskey-client-") { return "", fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>") }
-	_,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-");if !ok||secret==""{return "",fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")};return secret,nil
+	clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-");if !ok||clientID==""||secret==""{return "",fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")};return credential,nil
 }
 
 func configuredTSTags(value string) []string {
@@ -67,9 +67,9 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-")
  if !ok||clientID==""||secret==""{return fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")}
  if strings.ContainsAny(clientID+secret,"\r\n\t "){return fmt.Errorf("TS_TRUST_CREDS client ID or secret contains whitespace")}
- fmt.Fprintf(os.Stderr,"[tailscale] TS_TRUST_CREDS format: client_id_present=true client_id=%s secret_present=true secret_length=%d; secret value redacted\n",clientID,len(secret))
+ fmt.Fprintf(os.Stderr,"[tailscale] TS_TRUST_CREDS format: client_id_present=true client_id=%s credential_present=true credential_length=%d; credential value redacted\n",clientID,len(credential))
  fmt.Fprintf(os.Stderr,"[tailscale] Validating OAuth credential with Tailscale API; scopes are evaluated after authentication.\n")
- form:=url.Values{"client_id":{clientID},"client_secret":{secret}}
+ // Tailscale uses the complete tskey-client-... string as the OAuth client secret.\n form:=url.Values{"client_id":{clientID},"client_secret":{credential}}
  reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  client:=&http.Client{Timeout:20*time.Second}
  tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",strings.NewReader(form.Encode()));if err!=nil{return err}

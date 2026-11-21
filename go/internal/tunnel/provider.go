@@ -69,7 +69,8 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  if strings.ContainsAny(clientID+secret,"\r\n\t "){return fmt.Errorf("TS_TRUST_CREDS client ID or secret contains whitespace")}
  fmt.Fprintf(os.Stderr,"[tailscale] TS_TRUST_CREDS format: client_id_present=true client_id=%s credential_present=true credential_length=%d; credential value redacted\n",clientID,len(credential))
  fmt.Fprintf(os.Stderr,"[tailscale] Validating OAuth credential with Tailscale API; scopes are evaluated after authentication.\n")
- // Tailscale uses the complete tskey-client-... string as the OAuth client secret.\n form:=url.Values{"client_id":{clientID},"client_secret":{credential}}
+ // Tailscale uses the complete tskey-client-... string as the OAuth client secret.
+ form:=url.Values{"client_id":{clientID},"client_secret":{credential}}
  reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  client:=&http.Client{Timeout:20*time.Second}
  tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",strings.NewReader(form.Encode()));if err!=nil{return err}

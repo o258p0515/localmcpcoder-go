@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
     paths:
+      - 'go/**'
+      - '.github/workflows/example-run.yml'
       - '.github/workflows/deploy-mcp.yml'
   workflow_dispatch:
 

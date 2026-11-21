@@ -63,7 +63,7 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  if !strings.HasPrefix(credential,"tskey-client-"){return fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>")}
  clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-")
  if !ok||clientID==""||secret==""{return fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")}
- form:=url.Values{"client_id":{clientID},"client_secret":{secret},"grant_type":{"client_credentials"},"scope":{"policy_file"}}
+ form:=url.Values{"client_id":{clientID},"client_secret":{secret},"grant_type":{"client_credentials"},"scope":{"policy_file devices:core:read devices:posture_attributes"}}
  reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  client:=&http.Client{Timeout:20*time.Second}
  tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",strings.NewReader(form.Encode()));if err!=nil{return err}
@@ -86,7 +86,15 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  var owners map[string]json.RawMessage
  if raw,exists:=policy["tagOwners"];exists{if err=json.Unmarshal(raw,&owners);err!=nil||owners==nil{return fmt.Errorf("tailnet policy tagOwners is not a JSON object")}}else{owners=map[string]json.RawMessage{}}
  changed:=false
- for _,tag:=range tags{if _,exists:=owners[tag];exists{continue};ownerJSON,_:=json.Marshal([]string{"autogroup:admin"});owners[tag]=ownerJSON;changed=true}
+ for _,tag:=range tags{
+  var tagOwners []string
+  if raw,exists:=owners[tag];exists{
+   if err=json.Unmarshal(raw,&tagOwners);err!=nil{return fmt.Errorf("tagOwners entry %q is not a string array",tag)}
+  }
+  foundAdmin:=false
+  for _,owner:=range tagOwners{if owner=="autogroup:admin"{foundAdmin=true;break}}
+  if !foundAdmin{tagOwners=append(tagOwners,"autogroup:admin");ownerJSON,_:=json.Marshal(tagOwners);owners[tag]=ownerJSON;changed=true}
+ }
  if !changed{return nil}
  ownersJSON,err:=json.Marshal(owners);if err!=nil{return err};policy["tagOwners"]=ownersJSON
  updated,err:=json.MarshalIndent(policy,"","  ");if err!=nil{return err}

@@ -13,14 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
-      - name: Download latest Linux amd64 MCP release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: go/go.mod
+
+      - name: Build MCP server for this runner
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/localmcpcoder"
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'mcp-linux-amd64' --dir "$RUNNER_TEMP/localmcpcoder"
-          chmod +x "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64"
+          cd go
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64" ./cmd/mcp
 
       - name: Provision Cloudflare named tunnel and DNS with Global API Key
         id: cloudflare

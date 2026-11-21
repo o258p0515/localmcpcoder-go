@@ -1,3 +1,33 @@
 package auth
 
-// Placeholder: static-client tests land with the full OAuth upgrade commit.
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"testing"
+)
+
+func TestStaticClientPKCEAndAuthentication(t *testing.T) {
+	const clientID = "mcp-client"
+	const clientSecret = "a-long-client-secret-for-tests"
+	const redirect = "http://127.0.0.1:43123/callback"
+	s := NewWithOptions(Options{
+		Passphrase: "0123456789abcdef0123456789abcdef",
+		ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURIs: []string{redirect},
+	})
+	if !s.AuthenticateClient(clientID, clientSecret) { t.Fatal("valid static client credentials rejected") }
+	if s.AuthenticateClient(clientID, "wrong-secret") { t.Fatal("invalid static client secret accepted") }
+	if _, err := s.ClientInfo(clientID, redirect); err != nil { t.Fatal(err) }
+	if _, err := s.ClientInfo(clientID, "http://127.0.0.1:43123/attacker"); err == nil { t.Fatal("unregistered redirect accepted") }
+
+	verifier := "0123456789012345678901234567890123456789012"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	code, err := s.AuthCode(clientID, redirect, challenge, "https://mcp.example.test/mcp", "mcp")
+	if err != nil { t.Fatal(err) }
+	access, refresh, err := s.Exchange(code, verifier, "https://mcp.example.test/mcp", clientID, redirect)
+	if err != nil { t.Fatal(err) }
+	if !s.Bearer(access, "https://mcp.example.test/mcp") { t.Fatal("issued access token rejected") }
+	if _, _, err := s.Exchange(code, verifier, "https://mcp.example.test/mcp", clientID, redirect); err == nil { t.Fatal("authorization code was reusable") }
+	if _, _, err := s.Refresh(refresh); err != nil { t.Fatal(err) }
+}

@@ -126,6 +126,9 @@ jobs:
       - name: Run MCP server (5h45m keep-alive window)
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
+          MCP_OAUTH_REDIRECT_URIS: ${{ secrets.MCP_OAUTH_REDIRECT_URIS }}
           TUNNEL_TOKEN: ${{ steps.cloudflare.outputs.tunnel_token }}
           MCP_HOST: ${{ steps.cloudflare.outputs.host }}
         run: |
@@ -134,6 +137,9 @@ jobs:
             echo "::error::MCP_TOKEN repository secret is required (generate with: openssl rand -hex 32)"
             exit 1
           fi
+          for name in MCP_OAUTH_CLIENT_ID MCP_OAUTH_CLIENT_SECRET MCP_OAUTH_REDIRECT_URIS; do
+            if [ -z "${!name:-}" ]; then echo "::error::$name repository secret is required for the pre-registered OAuth client"; exit 1; fi
+          done
           ROOT="$RUNNER_TEMP/mcp-root"
           mkdir -p "$ROOT"
           set +e

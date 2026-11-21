@@ -18,7 +18,7 @@ type Service struct { pass string; key []byte; mu sync.Mutex; used map[string]in
 type Claims struct { Typ string `json:"typ,omitempty"`; ClientID string `json:"client_id,omitempty"`; ClientName string `json:"client_name,omitempty"`; RedirectURIs []string `json:"redirect_uris,omitempty"`; RedirectURI string `json:"redirect_uri,omitempty"`; Challenge string `json:"code_challenge,omitempty"`; Resource string `json:"resource,omitempty"`; Scope string `json:"scope,omitempty"`; Aud string `json:"aud,omitempty"`; CID string `json:"cid,omitempty"`; Exp int64 `json:"exp"` }
 func NewWithOptions(o Options)*Service {
  s:=New(o.Passphrase)
- s.staticID=o.ClientID; s.staticSecret=o.ClientSecret; s.staticName=o.ClientName; s.allowAnyRedirect=o.AllowAnyRedirect
+ s.staticID=o.ClientID; s.staticSecret=o.ClientSecret; s.staticName=o.ClientName; s.allowAnyRedirect=o.AllowAnyRedirect; s.allowAnyRedirect=o.AllowAnyRedirect
  if s.staticName=="" { s.staticName="Pre-registered MCP client" }
  s.staticRedirects=map[string]bool{}
  for _,v:=range o.RedirectURIs { if validRedirect(v) { s.staticRedirects[v]=true } }

@@ -132,6 +132,7 @@ jobs:
           TUNNEL_TOKEN: ${{ steps.cloudflare.outputs.tunnel_token }}
           TS_TRUST_CREDS: ${{ secrets.TS_TRUST_CREDS }}
           TS_TAGS: ${{ secrets.TS_TAGS }}
+          TS_HOSTNAME: localmcpcoder-gha
           MCP_HOST: ${{ steps.cloudflare.outputs.host }}
         run: |
           set -euo pipefail

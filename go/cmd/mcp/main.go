@@ -38,12 +38,21 @@ func main() {
 	if e = waitLocal(ctx, addr); e != nil { _ = httpSrv.Close(); log.Fatal(e) }
 	mode := cfg.Tunnel
 	if mode == "auto" {
-		if os.Getenv("CF_API_TOKEN") != "" || os.Getenv("TUNNEL_TOKEN") != "" { mode = "cloudflare" } else if os.Getenv("TS_AUTHKEY") != "" { mode = "tailscale" } else { mode = "none" }
+		if os.Getenv("CF_API_TOKEN") != "" || os.Getenv("TUNNEL_TOKEN") != "" { mode = "cloudflare" } else if os.Getenv("TS_AUTHKEY") != "" || os.Getenv("TS_TRUST_CREDS") != "" { mode = "tailscale" } else { mode = "none" }
 	}
 	p, e := tunnel.Select(mode)
 	if e != nil { log.Fatal(e) }
 	public, stopTunnel, e := p.Start(ctx, tunnel.Config{Host: cfg.Host, Port: cfg.Port, Provider: mode, TSHostname: cfg.TSHostname, TSMode: cfg.TSMode}, addr)
 	if e != nil { _ = httpSrv.Close(); log.Fatal(e) }
+	var stopTailscale func() error
+	// Keep Cloudflare as the public endpoint while also joining the machine to
+	// the private tailnet. Trust Credential exchange happens inside this Go process.
+	if mode != "tailscale" && os.Getenv("TS_TRUST_CREDS") != "" {
+		tsPublic, tsStop, tsErr := (tunnel.Tailscale{}).Start(ctx, tunnel.Config{Port: cfg.Port, TSHostname: cfg.TSHostname, TSMode: "serve"}, addr)
+		if tsErr != nil { if stopTunnel != nil { _ = stopTunnel() }; _ = httpSrv.Close(); log.Fatalf("Tailscale setup failed: %v", tsErr) }
+		stopTailscale = tsStop
+		log.Printf("Tailscale node joined; private endpoint: %s", tsPublic)
+	}
 	if public != "" { log.Printf("localmcpcoder-go %s ready: %s/mcp (root %s; tunnel=%s)", version, public, cfg.Root, mode) } else { log.Printf("localmcpcoder-go %s listening on %s (tunnel=%s; use the hostname configured on that tunnel)", version, addr, mode) }
 	if os.Getenv("GITHUB_ACTIONS") != "true" && isTTY() { log.Printf("MCP passphrase: %s", cfg.Token) }
 	select {
@@ -51,6 +60,7 @@ func main() {
 	case e = <-errCh:
 		if e != nil && e != http.ErrServerClosed { log.Printf("HTTP server stopped: %v", e) }
 	}
+	if stopTailscale != nil { if te := stopTailscale(); te != nil { log.Printf("stop Tailscale: %v", te) } }
 	if stopTunnel != nil { if te := stopTunnel(); te != nil { log.Printf("stop tunnel: %v", te) } }
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

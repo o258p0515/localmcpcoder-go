@@ -1,4 +1,4 @@
-name: Deploy one public MCP runner
+name: Deploy one public MCP runner # refresh runner deployment
 on:
   push:
     branches: [main]

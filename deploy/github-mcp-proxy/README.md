@@ -43,7 +43,7 @@ Encode the Firebase Service Account JSON file as one-line Base64:
 
 ## GitHub Repository Secrets
 
-The deployment workflow uses these preconfigured secrets: CF_API_EMAIL, CF_API_KEY, CF_DOMAIN, MCP_TOKEN, MCP_OAUTH_CLIENT_ID, MCP_OAUTH_CLIENT_SECRET, MCP_OAUTH_REDIRECT_URIS, TS_TRUST_CREDS, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT_JSON_B64, RTDB_URL, and RTDB_AUTH_URL.
+If the Cloudflare account has no workers.dev subdomain yet, the deployment script provisions an account-level subdomain automatically; the Worker itself is configured to serve only the custom domain. The deployment workflow uses these preconfigured secrets: CF_API_EMAIL, CF_API_KEY, CF_DOMAIN, MCP_TOKEN, MCP_OAUTH_CLIENT_ID, MCP_OAUTH_CLIENT_SECRET, MCP_OAUTH_REDIRECT_URIS, TS_TRUST_CREDS, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT_JSON_B64, RTDB_URL, and RTDB_AUTH_URL.
 
 Runtime Firebase auth priority: FIREBASE_SERVICE_ACCOUNT_JSON_B64 → FIREBASE_SERVICE_ACCOUNT_JSON → fallback RTDB_AUTH_URL. When using Service Account, set RTDB_URL to the clean URL ending in /github_accounts.json (the Worker also checks /env/github_accounts.json if the direct node is empty). Otherwise RTDB_AUTH_URL must include ?auth=....
 

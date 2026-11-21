@@ -1,5 +1,7 @@
 name: Example remote MCP runner
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
     # Start a fresh runner every five hours. Jobs intentionally overlap.

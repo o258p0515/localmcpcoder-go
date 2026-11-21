@@ -5,4 +5,6 @@ wrangler.deploy.jsonc
 wrangler.dryrun.jsonc
 .dev.vars
 .env*
-service-account*.json\n*.pem\n
+service-account*.json
+*.pem
+worker-endpoint.txt

@@ -49,6 +49,12 @@ jobs:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
         run: node scripts/prepare-deploy.mjs
+      - name: Publish selected Worker endpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-mcp-proxy-endpoint
+          path: deploy/github-mcp-proxy/worker-endpoint.txt
+          retention-days: 7
       - name: Deploy Worker
         run: npx wrangler deploy --config wrangler.deploy.jsonc
       - name: Sync runtime secrets
@@ -77,4 +83,4 @@ jobs:
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' | tee /tmp/mcp-tools.json | grep -q 'list_github_accounts'
           grep -q '"account"' /tmp/mcp-tools.json
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}' | grep -q 'isError'
-# Deploy the proxy on a dedicated hostname without altering existing DNS records.
+# Publish the generated endpoint as a short-lived workflow artifact.

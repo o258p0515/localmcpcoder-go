@@ -37,5 +37,7 @@ const oauth=await ensure("github-mcp-oauth-kv"),cache=await ensure("github-mcp-c
 let cfg=await readFile(new URL("../wrangler.jsonc",import.meta.url),"utf8");
 cfg=cfg.replaceAll("__CF_ACCOUNT_ID__",zone.account.id).replaceAll("__CF_DOMAIN__",workerDomain).replaceAll("__OAUTH_KV_ID__",oauth).replaceAll("__CACHE_KV_ID__",cache);
 await writeFile(new URL("../wrangler.deploy.jsonc",import.meta.url),cfg);
+await writeFile(new URL("../worker-endpoint.txt",import.meta.url),"https://"+workerDomain+"/mcp\n");
+if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,"## GitHub MCP Proxy endpoint\n\nhttps://"+workerDomain+"/mcp\n");
 if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,"CLOUDFLARE_ACCOUNT_ID="+zone.account.id+"\nCLOUDFLARE_API_KEY="+key+"\nCLOUDFLARE_EMAIL="+email+"\nWORKER_DOMAIN="+workerDomain+"\n");
 console.error("Prepared Cloudflare deployment config for "+workerDomain+"; account and credentials are not printed.");

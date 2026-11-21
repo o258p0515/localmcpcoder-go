@@ -96,6 +96,29 @@ if (errors.length) {
   process.exit(1);
 }
 
+function describeRtdbValue(value) {
+  if (value === null) return "null (node does not exist or is empty)";
+  if (Array.isArray(value)) return "array";
+  if (typeof value !== "object") return typeof value;
+  const keys = Object.keys(value);
+  const first = Object.values(value)[0];
+  const fields = first && typeof first === "object" && !Array.isArray(first) ? Object.keys(first) : [];
+  return "object with " + keys.length + " top-level entries; first-entry fields=[" + fields.slice(0, 20).join(",") + "]";
+}
+async function rootChildNames(url, accessToken) {
+  try {
+    const root = new URL(url);
+    root.pathname = "/.json";
+    root.searchParams.set("shallow", "true");
+    if (accessToken) root.searchParams.set("access_token", accessToken);
+    const response = await fetch(root);
+    if (!response.ok) return "unavailable";
+    const value = await response.json();
+    return value && typeof value === "object" ? Object.keys(value).slice(0, 30).join(",") || "(empty)" : "(empty)";
+  } catch {
+    return "unavailable";
+  }
+}
 async function cloudflare(path) {
   const response = await fetch("https://api.cloudflare.com/client/v4" + path, {
     headers: { "X-Auth-Email": email, "X-Auth-Key": apiKey }
@@ -145,7 +168,8 @@ try {
     if (!response.ok) throw new Error("RTDB live check failed (HTTP " + response.status + ")");
     const data = await response.json();
     if (!data || typeof data !== "object" || !Object.values(data).some(account => account?.token && account.enabled !== false)) {
-      throw new Error("RTDB node has no enabled account with token");
+      const rootKeys = await rootChildNames(rtdbUrl, tokenData.access_token);
+      throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]. Expected /github_accounts with child records containing token and enabled fields.");
     }
     enabledAccounts = Object.values(data).filter(account => account?.token && account.enabled !== false).length;
   } else {
@@ -153,7 +177,8 @@ try {
     if (!response.ok) throw new Error("RTDB fallback live check failed (HTTP " + response.status + ")");
     const data = await response.json();
     if (!data || typeof data !== "object" || !Object.values(data).some(account => account?.token && account.enabled !== false)) {
-      throw new Error("RTDB node has no enabled account with token");
+      const rootKeys = await rootChildNames(rtdbUrl);
+      throw new Error("RTDB account node has no enabled direct account records (" + describeRtdbValue(data) + "). Database root child names: [" + rootKeys + "]. Expected /github_accounts with child records containing token and enabled fields.");
     }
     enabledAccounts = Object.values(data).filter(account => account?.token && account.enabled !== false).length;
   }

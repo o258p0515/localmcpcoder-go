@@ -66,7 +66,7 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  if !strings.HasPrefix(credential,"tskey-client-"){return fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>")}
  clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-")
  if !ok||clientID==""||secret==""{return fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")}
- if strings.ContainsAny(clientID+secret,"\\r\\n\\t "){return fmt.Errorf("TS_TRUST_CREDS client ID or secret contains whitespace")}
+ if strings.ContainsAny(clientID+secret,"\r\n\t "){return fmt.Errorf("TS_TRUST_CREDS client ID or secret contains whitespace")}
  fmt.Fprintf(os.Stderr,"[tailscale] TS_TRUST_CREDS format: client_id_present=true client_id=%s secret_present=true secret_length=%d; secret value redacted\n",clientID,len(secret))
  fmt.Fprintf(os.Stderr,"[tailscale] Validating OAuth credential with Tailscale API; scopes are evaluated after authentication.\n")
  form:=url.Values{"client_id":{clientID},"client_secret":{secret}}

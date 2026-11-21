@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+dist/
+mcp
+mcp.exe
+.mcp-todos.json
+*.log

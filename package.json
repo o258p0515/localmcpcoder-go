@@ -1,0 +1,18 @@
+{
+  "name": "localmcpcoder",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Remote MCP server with Claude Code style tools (bash, read, write, edit, glob, grep, todo), published through a free Cloudflare tunnel",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "tunnel": "cloudflared tunnel --url http://localhost:8787"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^4.21.2",
+    "zod": "^3.25.76"
+  }
+}

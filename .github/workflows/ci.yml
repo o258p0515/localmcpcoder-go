@@ -1,0 +1,34 @@
+name: Go CI
+on:
+  push:
+    paths:
+      - 'go/**'
+      - 'Makefile'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'go/**'
+      - 'Makefile'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: go/go.mod
+      - name: Test
+        run: make test
+      - name: Vet
+        run: make vet
+      - name: Smoke test
+        run: ./scripts/smoke.sh
+      - name: Cross-compile
+        run: make dist VERSION=ci

@@ -67,7 +67,7 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  form:=url.Values{"client_id":{clientID},"client_secret":{secret}}
  reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  client:=&http.Client{Timeout:20*time.Second}
- tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",form);if err!=nil{return err}
+ tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",strings.NewReader(form.Encode()));if err!=nil{return err}
  tokenReq.Header.Set("Content-Type","application/x-www-form-urlencoded")
  tokenResp,err:=client.Do(tokenReq);if err!=nil{return fmt.Errorf("request OAuth token: %w",err)};defer tokenResp.Body.Close()
  if tokenResp.StatusCode<200||tokenResp.StatusCode>=300 {

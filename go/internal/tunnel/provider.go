@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,7 +64,7 @@ func ensureTailscalePolicyTags(ctx context.Context,tags []string) error {
  if !strings.HasPrefix(credential,"tskey-client-"){return fmt.Errorf("TS_TRUST_CREDS must have form tskey-client-<client-id>-<secret>")}
  clientID,secret,ok:=strings.Cut(strings.TrimPrefix(credential,"tskey-client-"),"-")
  if !ok||clientID==""||secret==""{return fmt.Errorf("TS_TRUST_CREDS has an invalid client credential format")}
- form:=strings.NewReader("client_id="+url.QueryEscape(clientID)+"&client_secret="+url.QueryEscape(secret))
+ form:=url.Values{"client_id":{clientID},"client_secret":{secret}}
  reqCtx,cancel:=context.WithTimeout(ctx,20*time.Second);defer cancel()
  client:=&http.Client{Timeout:20*time.Second}
  tokenReq,err:=http.NewRequestWithContext(reqCtx,http.MethodPost,"https://api.tailscale.com/api/v2/oauth/token",form);if err!=nil{return err}

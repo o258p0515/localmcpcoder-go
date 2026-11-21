@@ -2,13 +2,18 @@ package tunnel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
-func TestTailscaleUsesExistingCLIAndResetsServe(t *testing.T){d:=t.TempDir();logPath:=filepath.Join(d,"calls");script:=filepath.Join(d,"tailscale");body:="#!/bin/sh\\necho \\\"$@\\\" >> '"+logPath+"'\\nif [ \\\"$1\\\" = serve ] && [ \\\"$2\\\" = --help ]; then echo --bg; fi\\nif [ \\\"$1\\\" = status ] && [ \\\"$2\\\" = --json ]; then echo '{\\\"Self\\\":{\\\"DNSName\\\":\\\"mcp.tailnet.ts.net.\\\"}}'; fi\\n";if e:=os.WriteFile(script,[]byte(body),0755);e!=nil{t.Fatal(e)};t.Setenv("TAILSCALE_BIN",script);u,stop,e:=(Tailscale{}).Start(context.Background(),Config{Port:8787,TSMode:"serve"},"127.0.0.1:8787");if e!=nil{t.Fatal(e)};if u!="https://mcp.tailnet.ts.net"{t.Fatalf("unexpected url %s",u)};if e=stop();e!=nil{t.Fatal(e)};b,_:=os.ReadFile(logPath);if !strings.Contains(string(b),"serve --bg 8787")||!strings.Contains(string(b),"serve reset"){t.Fatalf("unexpected CLI calls: %s",b)}}
+func TestTailscaleUsesExistingCLIAndResetsServe(t *testing.T){d:=t.TempDir();logPath:=filepath.Join(d,"calls");script:=filepath.Join(d,"tailscale");body:=fmt.Sprintf(`#!/bin/sh
+echo "$@" >> '%s'
+if [ "$1" = serve ] && [ "$2" = --help ]; then echo --bg; fi
+if [ "$1" = status ] && [ "$2" = --json ]; then echo '{"Self":{"DNSName":"mcp.tailnet.ts.net."}}'; fi
+`,logPath);if e:=os.WriteFile(script,[]byte(body),0755);e!=nil{t.Fatal(e)};t.Setenv("TAILSCALE_BIN",script);u,stop,e:=(Tailscale{}).Start(context.Background(),Config{Port:8787,TSMode:"serve"},"127.0.0.1:8787");if e!=nil{t.Fatal(e)};if u!="https://mcp.tailnet.ts.net"{t.Fatalf("unexpected url %s",u)};if e=stop();e!=nil{t.Fatal(e)};b,_:=os.ReadFile(logPath);if !strings.Contains(string(b),"serve --bg 8787")||!strings.Contains(string(b),"serve reset"){t.Fatalf("unexpected CLI calls: %s",b)}}
 func TestTailscaleStartsEphemeralUserspaceDaemonWhenNeeded(t *testing.T){if runtime.GOOS!="linux"{t.Skip("static daemon bootstrap is Linux-only")};d:=t.TempDir();calls:=filepath.Join(d,"cli-calls");state:=filepath.Join(d,"authenticated");daemonArgs:=filepath.Join(d,"daemon-args");cli:=filepath.Join(d,"tailscale");cliScript:=`#!/bin/sh
 socket=""
 if [ "${1#--socket=}" != "$1" ]; then socket="${1#--socket=}"; shift; fi

@@ -2,31 +2,122 @@ name: Example remote MCP runner
 on:
   workflow_dispatch:
   schedule:
+    # Start a fresh runner every five hours. Jobs intentionally overlap.
     - cron: '0 */5 * * *'
+
 permissions:
   contents: read
-concurrency:
-  group: localmcpcoder-example-run
-  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
-      - name: Download latest Linux amd64 release
+      - name: Download latest Linux amd64 MCP release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/localmcpcoder"
           gh release download --repo "$GITHUB_REPOSITORY" --pattern 'mcp-linux-amd64' --dir "$RUNNER_TEMP/localmcpcoder"
           chmod +x "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64"
-      - name: Run MCP server with Cloudflare tunnel
+
+      - name: Provision Cloudflare named tunnel and DNS with Global API Key
+        id: cloudflare
         env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
-          MCP_HOST: ${{ secrets.MCP_HOST }}
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
         run: |
-          test -n "$CF_API_TOKEN" || { echo 'CF_API_TOKEN secret is required'; exit 1; }
-          test -n "$MCP_TOKEN" || { echo 'MCP_TOKEN secret is required'; exit 1; }
-          test -n "$MCP_HOST" || { echo 'MCP_HOST secret is required'; exit 1; }
-          "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64" --root "$GITHUB_WORKSPACE" --tunnel cloudflare --host "$MCP_HOST"
+          set -euo pipefail
+          for name in CF_API_EMAIL CF_API_KEY CF_DOMAIN; do
+            if [ -z "${!name:-}" ]; then echo "::error::$name repository secret is required"; exit 1; fi
+          done
+          # CF_DOMAIN must be the complete public hostname, e.g. mcp.example.com.
+          HOST="$CF_DOMAIN"
+          API="https://api.cloudflare.com/client/v4"
+          cf_api() {
+            method="$1"; path="$2"; data="${3:-}"
+            if [ -n "$data" ]; then
+              curl --fail-with-body --silent --show-error -X "$method" "$API$path" \
+                -H "X-Auth-Email: $CF_API_EMAIL" -H "X-Auth-Key: $CF_API_KEY" \
+                -H "Content-Type: application/json" --data "$data"
+            else
+              curl --fail-with-body --silent --show-error -X "$method" "$API$path" \
+                -H "X-Auth-Email: $CF_API_EMAIL" -H "X-Auth-Key: $CF_API_KEY" \
+                -H "Content-Type: application/json"
+            fi
+          }
+          # Find the most specific Cloudflare zone matching the hostname.
+          ZONE_JSON=""
+          IFS='.' read -r -a LABELS <<< "$HOST"
+          for ((i=0; i<${#LABELS[@]}-1; i++)); do
+            CANDIDATE="$(IFS=.; echo "${LABELS[*]:i}")"
+            RESPONSE="$(cf_api GET "/zones?name=$CANDIDATE")"
+            if [ "$(jq -r '.success' <<<"$RESPONSE")" != "true" ]; then
+              jq -c '.errors' <<<"$RESPONSE" >&2
+              exit 1
+            fi
+            if [ "$(jq '.result | length' <<<"$RESPONSE")" -gt 0 ]; then ZONE_JSON="$RESPONSE"; break; fi
+          done
+          if [ -z "$ZONE_JSON" ]; then echo "::error::No Cloudflare zone found for $HOST"; exit 1; fi
+          ZONE_ID="$(jq -r '.result[0].id' <<<"$ZONE_JSON")"
+          ACCOUNT_ID="$(jq -r '.result[0].account.id' <<<"$ZONE_JSON")"
+          if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "null" ]; then echo "::error::Cloudflare zone response has no account id"; exit 1; fi
+
+          TUNNEL_NAME="localmcpcoder-${HOST//./-}"
+          RESPONSE="$(cf_api GET "/accounts/$ACCOUNT_ID/cfd_tunnel?name=$TUNNEL_NAME&is_deleted=false")"
+          [ "$(jq -r '.success' <<<"$RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$RESPONSE" >&2; exit 1; }
+          TUNNEL_ID="$(jq -r '.result[0].id // empty' <<<"$RESPONSE")"
+          if [ -z "$TUNNEL_ID" ]; then
+            RESPONSE="$(cf_api POST "/accounts/$ACCOUNT_ID/cfd_tunnel" "{\"name\":\"$TUNNEL_NAME\",\"config_src\":\"cloudflare\"}")"
+            [ "$(jq -r '.success' <<<"$RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$RESPONSE" >&2; exit 1; }
+            TUNNEL_ID="$(jq -r '.result.id' <<<"$RESPONSE")"
+          fi
+          TOKEN_RESPONSE="$(cf_api GET "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/token")"
+          [ "$(jq -r '.success' <<<"$TOKEN_RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$TOKEN_RESPONSE" >&2; exit 1; }
+          TUNNEL_TOKEN="$(jq -r '.result // empty' <<<"$TOKEN_RESPONSE")"
+          [ -n "$TUNNEL_TOKEN" ] || { echo "::error::Cloudflare returned an empty tunnel token"; exit 1; }
+          echo "::add-mask::$TUNNEL_TOKEN"
+
+          CONFIG="$(jq -nc --arg host "$HOST" '{config:{ingress:[{hostname:$host,service:"http://127.0.0.1:8787"},{service:"http_status:404"}]}}')"
+          RESPONSE="$(cf_api PUT "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" "$CONFIG")"
+          [ "$(jq -r '.success' <<<"$RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$RESPONSE" >&2; exit 1; }
+          DNS="$(cf_api GET "/zones/$ZONE_ID/dns_records?type=CNAME&name=$HOST")"
+          [ "$(jq -r '.success' <<<"$DNS")" = "true" ] || { jq -c '.errors' <<<"$DNS" >&2; exit 1; }
+          DNS_ID="$(jq -r '.result[0].id // empty' <<<"$DNS")"
+          RECORD="$(jq -nc --arg name "$HOST" --arg content "$TUNNEL_ID.cfargotunnel.com" '{type:"CNAME",name:$name,content:$content,proxied:true}')"
+          if [ -n "$DNS_ID" ]; then
+            RESPONSE="$(cf_api PUT "/zones/$ZONE_ID/dns_records/$DNS_ID" "$RECORD")"
+          else
+            RESPONSE="$(cf_api POST "/zones/$ZONE_ID/dns_records" "$RECORD")"
+          fi
+          [ "$(jq -r '.success' <<<"$RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$RESPONSE" >&2; exit 1; }
+
+          # Pass only the connector token to the MCP process; never expose the Global API Key to it.
+          echo "tunnel_token=$TUNNEL_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          echo "Cloudflare tunnel and DNS are configured for https://$HOST"
+
+      - name: Run MCP server (5h45m keep-alive window)
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          TUNNEL_TOKEN: ${{ steps.cloudflare.outputs.tunnel_token }}
+          MCP_HOST: ${{ steps.cloudflare.outputs.host }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MCP_TOKEN:-}" ]; then
+            echo "::error::MCP_TOKEN repository secret is required (generate with: openssl rand -hex 32)"
+            exit 1
+          fi
+          ROOT="$RUNNER_TEMP/mcp-root"
+          mkdir -p "$ROOT"
+          set +e
+          timeout --signal=TERM --kill-after=10s 5h45m \
+            "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64" \
+            --root "$ROOT" --tunnel cloudflare --host "$MCP_HOST"
+          STATUS=$?
+          set -e
+          # timeout returns 124 when the planned keep-alive window ends; TERM lets MCP shut down cleanly.
+          if [ "$STATUS" -eq 124 ]; then exit 0; fi
+          exit "$STATUS"

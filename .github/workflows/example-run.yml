@@ -1,8 +1,10 @@
 name: Example remote MCP runner
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+  workflow_run:
+    workflows: [Go CI]
+    types: [completed]
+    branches: [main]
   schedule:
     # Start a fresh runner every five hours. Jobs intentionally overlap.
     - cron: '0 */5 * * *'
@@ -12,6 +14,7 @@ permissions:
 
 jobs:
   run:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:

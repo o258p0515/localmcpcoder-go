@@ -13,7 +13,7 @@ func TestStaticClientPKCEAndAuthentication(t *testing.T) {
 	s := NewWithOptions(Options{
 		Passphrase: "0123456789abcdef0123456789abcdef",
 		ClientID: clientID, ClientSecret: clientSecret,
-		RedirectURIs: []string{redirect},
+		RedirectURIs: []string{redirect}, AllowAnyRedirect: true,
 	})
 	if !s.AuthenticateClient(clientID, clientSecret) { t.Fatal("valid static client credentials rejected") }
 	if s.AuthenticateClient(clientID, "wrong-secret") { t.Fatal("invalid static client secret accepted") }

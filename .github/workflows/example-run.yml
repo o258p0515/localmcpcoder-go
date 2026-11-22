@@ -2,12 +2,7 @@ name: Example remote MCP runner
 on:
   workflow_dispatch:
   schedule:
-    # Start a fresh runner every five hours. Jobs intentionally overlap.
     - cron: '0 */5 * * *'
-
-concurrency:
-  group: public-mcp-runner
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -54,7 +49,6 @@ jobs:
           CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
         run: |
           set -euo pipefail
-          # Strip accidental whitespace/newlines from copied GitHub secrets before building HTTP headers.
           CF_API_EMAIL="$(printf '%s' "${CF_API_EMAIL:-}" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           CF_API_KEY="$(printf '%s' "${CF_API_KEY:-}" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           CF_DOMAIN="$(printf '%s' "${CF_DOMAIN:-}" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -65,7 +59,6 @@ jobs:
             echo "::error::CF_API_EMAIL must contain the Cloudflare account email address (not an API key/token); check the repository secret value."
             exit 1
           fi
-          # CF_DOMAIN must be a bare hostname, e.g. mcp.example.com (no scheme/path).
           HOST="$(printf '%s' "$CF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')"
           if [[ ! "$HOST" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]; then
             echo "::error::CF_DOMAIN must be a bare DNS hostname (for example mcp.example.com); do not include https://, a path, or a port."
@@ -87,13 +80,11 @@ jobs:
             body="${response%$'\n'*}"
             if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
               echo "::error::Cloudflare API returned HTTP $status for $method $path" >&2
-              # Cloudflare error bodies contain diagnostic codes/messages, not credentials.
               printf '%s\n' "$body" | jq -c . >&2 2>/dev/null || printf '%s\n' "$body" >&2
               return 1
             fi
             printf '%s' "$body"
           }
-          # Find the most specific Cloudflare zone matching the hostname.
           ZONE_JSON=""
           IFS='.' read -r -a LABELS <<< "$HOST"
           for ((i=0; i<${#LABELS[@]}-1; i++)); do
@@ -110,7 +101,6 @@ jobs:
           ZONE_ID="$(jq -r '.result[0].id' <<<"$ZONE_JSON")"
           ACCOUNT_ID="$(jq -r '.result[0].account.id' <<<"$ZONE_JSON")"
           if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "null" ]; then echo "::error::Cloudflare zone response has no account id"; exit 1; fi
-
           TUNNEL_NAME="localmcpcoder-${HOST//./-}"
           ENCODED_TUNNEL_NAME="$(jq -rn --arg value "$TUNNEL_NAME" '$value | @uri')"
           RESPONSE="$(cf_api GET "/accounts/$ACCOUNT_ID/cfd_tunnel?name=$ENCODED_TUNNEL_NAME&is_deleted=false")"
@@ -126,7 +116,6 @@ jobs:
           TUNNEL_TOKEN="$(jq -r '.result // empty' <<<"$TOKEN_RESPONSE")"
           [ -n "$TUNNEL_TOKEN" ] || { echo "::error::Cloudflare returned an empty tunnel token"; exit 1; }
           echo "::add-mask::$TUNNEL_TOKEN"
-
           CONFIG="$(jq -nc --arg host "$HOST" '{config:{ingress:[{hostname:$host,service:"http://127.0.0.1:8787"},{service:"http_status:404"}]}}')"
           RESPONSE="$(cf_api PUT "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" "$CONFIG")"
           [ "$(jq -r '.success' <<<"$RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$RESPONSE" >&2; exit 1; }
@@ -140,8 +129,6 @@ jobs:
             RESPONSE="$(cf_api POST "/zones/$ZONE_ID/dns_records" "$RECORD")"
           fi
           [ "$(jq -r '.success' <<<"$RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$RESPONSE" >&2; exit 1; }
-
-          # Pass only the connector token to the MCP process; never expose the Global API Key to it.
           echo "tunnel_token=$TUNNEL_TOKEN" >> "$GITHUB_OUTPUT"
           echo "host=$HOST" >> "$GITHUB_OUTPUT"
           echo "Cloudflare tunnel and DNS are configured for https://$HOST"
@@ -174,6 +161,5 @@ jobs:
             --root "$ROOT" --tunnel cloudflare --host "$MCP_HOST"
           STATUS=$?
           set -e
-          # timeout returns 124 when the planned keep-alive window ends; TERM lets MCP shut down cleanly.
           if [ "$STATUS" -eq 124 ]; then exit 0; fi
           exit "$STATUS"

@@ -105,9 +105,16 @@ jobs:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
-          BODY=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":22,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"public-endpoint-smoke","version":"1"}}}')
-          echo "Public connector MCP initialize response: $BODY"
-          echo "$BODY" | grep -q 'github-mcp-proxy'
+          INIT=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":22,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"public-endpoint-smoke","version":"1"}}}')
+          echo "Public connector MCP initialize response: $INIT"
+          echo "$INIT" | grep -q 'github-mcp-proxy'
+          TOOLS=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":23,"method":"tools/list","params":{}}')
+          echo "Public connector tool catalog bytes: ${#TOOLS}"
+          echo "$TOOLS" | grep -q 'list_github_accounts'
+          echo "$TOOLS" | grep -q '"account"'
+          ACCOUNT=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"personal"}}}')
+          echo "Public connector selected-account response: $ACCOUNT"
+          echo "$ACCOUNT" | grep -q 'login'
       - name: Smoke test dynamic tool catalog
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}

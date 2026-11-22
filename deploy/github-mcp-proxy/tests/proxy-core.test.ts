@@ -35,4 +35,3 @@ describe("create_repository REST compatibility",()=>{
   expect(r.result.isError).toBe(true);const body=JSON.parse(r.result.content[0].text);expect(body.status).toBe(403);expect(body.required_permissions).toBe("Administration=write");
  });
 });
-   38

@@ -21,17 +21,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Stop older MCP runner instances
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" --paginate --jq '.workflow_runs[] | select(.name == "Example remote MCP runner" and (.id | tostring) != env.GITHUB_RUN_ID and .status != "completed") | .id' |
-          while read -r run_id; do
-            [ -n "$run_id" ] || continue
-            echo "Stopping previous MCP runner run $run_id"
-            gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel" || true
-          done
+      # GitHub Actions concurrency (group + cancel-in-progress) already stops
+      # the previous runner. Avoid a second paginated cancellation API call.
 
       - name: Validate required runner secrets
         env:

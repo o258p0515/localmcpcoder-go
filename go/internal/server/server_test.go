@@ -149,3 +149,17 @@ func TestSkillsReloadEmitsListChanged(t *testing.T) {
 	if !strings.Contains(string(b), "text/event-stream") && resp.Header.Get("Content-Type") != "text/event-stream" { t.Fatalf("expected SSE content type, got %s", resp.Header.Get("Content-Type")) }
 	if _, e = sk.Read("custom-skill", ""); e != nil { t.Fatalf("shared skills store not reloaded: %v", e) }
 }
+
+func TestMCPBearerSchemeIsCaseInsensitive(t *testing.T) {
+ root:=t.TempDir()
+ f,err:=fsx.New(root,false);if err!=nil{t.Fatal(err)}
+ sk,err:=skills.Load(root,"");if err!=nil{t.Fatal(err)}
+ s:=New(config.Config{Root:root,Token:"0123456789abcdef"},tools.New(tools.Deps{FS:f,Root:root,MaxOutput:1000,Skills:sk}),sk)
+ h:=httptest.NewServer(s.Handler());defer h.Close()
+ body:=[]byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)
+ req,err:=http.NewRequest("POST",h.URL+"/mcp",bytes.NewReader(body));if err!=nil{t.Fatal(err)}
+ req.Header.Set("Content-Type","application/json")
+ req.Header.Set("Authorization","bearer 0123456789abcdef")
+ resp,err:=http.DefaultClient.Do(req);if err!=nil{t.Fatal(err)};defer resp.Body.Close()
+ if resp.StatusCode!=http.StatusOK{t.Fatalf("lowercase bearer scheme rejected: %s",resp.Status)}
+}

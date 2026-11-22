@@ -27,7 +27,7 @@ async function request(env:Env,account:RtdbAccount,alias:string,message:any,sess
   throw Error(details.join("; "));
  }
  if(ct.includes("text/event-stream")){
-  const frames=raw.split(/\n\n/).flatMap(x=>{const d=x.split("\n").filter(l=>l.startsWith("data:")).map(l=>l.slice(5).trim()).join("\n");if(!d||d==="[DONE]")return[];try{return[JSON.parse(d)]}catch{return[]}});
+  const frames=raw.replace(/\r\n/g,"\n").split(/\n\n/).flatMap(x=>{const d=x.split("\n").filter(l=>l.startsWith("data:")).map(l=>l.slice(5).trim()).join("\n");if(!d||d==="[DONE]")return[];try{return[JSON.parse(d)]}catch{return[]}});
   return frames.find(x=>x.id===message.id)||frames.at(-1)||{};
  }
  try{return JSON.parse(raw);}catch{return {error:{message:"Invalid upstream JSON response: "+safeExcerpt(raw)}};}

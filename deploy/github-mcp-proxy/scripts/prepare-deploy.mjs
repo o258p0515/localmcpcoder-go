@@ -63,5 +63,5 @@ cfg=cfg.replaceAll("__CF_ACCOUNT_ID__",zone.account.id).replaceAll("__WORKER_ROU
 await writeFile(new URL("../wrangler.deploy.jsonc",import.meta.url),cfg);
 await writeFile(new URL("../worker-endpoint.txt",import.meta.url),"https://"+publicDomain+"/mcp\n");
 if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,"## GitHub MCP Proxy endpoint\n\nhttps://"+publicDomain+"/mcp\n");
-if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,"CLOUDFLARE_ACCOUNT_ID="+zone.account.id+"\nCLOUDFLARE_API_KEY="+key+"\nCLOUDFLARE_EMAIL="+email+"\nWORKER_DOMAIN="+workerDomain+"\n");
+if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,"CLOUDFLARE_ACCOUNT_ID="+zone.account.id+"\nCLOUDFLARE_API_KEY="+key+"\nCLOUDFLARE_EMAIL="+email+"\nWORKER_DOMAIN="+workerDomain+"\nPUBLIC_DOMAIN="+publicDomain+"\n");
 console.error("Prepared Cloudflare deployment config for "+workerDomain+"; account and credentials are not printed.");

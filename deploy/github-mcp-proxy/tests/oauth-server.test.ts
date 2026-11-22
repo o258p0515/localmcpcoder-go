@@ -5,8 +5,18 @@ function kv(){const m=new Map<string,string>();return {m,get:async(k:string)=>m.
 describe("OAuth redirect validation and registration",()=>{
  it.each(["https://any.example/callback","http://localhost:8787/cb","cursor://oauth/callback","vscode://callback"])("accepts %s",x=>expect(isValidRedirectUri(x)).toBe(true));
  it.each(["javascript:alert(1)","data:text/html,x","https://host/cb#fragment","not a url"])("rejects %s",x=>expect(isValidRedirectUri(x)).toBe(false));
- it("stores only a hash of a DCR client secret",async()=>{const OAUTH_KV=kv(),env:any={OAUTH_KV};const r=await handleOAuthRequest(new Request("https://proxy/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_name:"test",redirect_uris:["cursor://cb"],token_endpoint_auth_method:"client_secret_post"})}),env);expect(r.status).toBe(201);const data:any=await r.json();const stored=OAUTH_KV.m.get("oauth:dcr:"+data.client_id);expect(stored).not.toContain(data.client_secret);expect(JSON.parse(stored).client_secret_hash).toBeTruthy();});
+ it("stores only a hash of a DCR client secret",async()=>{const OAUTH_KV=kv(),env:any={OAUTH_KV};const r=await handleOAuthRequest(new Request("https://proxy/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_name:"test",redirect_uris:["cursor://cb"],token_endpoint_auth_method:"client_secret_post"})}),env);expect(r.status).toBe(201);const data:any=await r.json();const stored=OAUTH_KV.m.get("oauth:dcr:"+data.client_id);expect(stored).not.toContain(data.client_secret);expect(JSON.parse(stored).client_secret_hash).toBeTruthy();expect(JSON.parse(stored).redirect_uris).toEqual(["cursor://cb"]);});
 
+ it("accepts any registered callback URI but rejects an unregistered redirect",async()=>{
+  const OAUTH_KV=kv(),env:any={OAUTH_KV};
+  const registration=await handleOAuthRequest(new Request("https://proxy/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_name:"test",redirect_uris:["https://client.example/callback","cursor://oauth/callback"],token_endpoint_auth_method:"none"})}),env);
+  const client:any=await registration.json();
+  const url=new URL("https://proxy/authorize");
+  for(const [k,v] of Object.entries({response_type:"code",client_id:client.client_id,redirect_uri:"https://attacker.example/callback",code_challenge:"challenge",code_challenge_method:"S256"}))url.searchParams.set(k,v);
+  expect((await handleOAuthRequest(new Request(url),env)).status).toBe(400);
+  url.searchParams.set("redirect_uri","cursor://oauth/callback");
+  expect((await handleOAuthRequest(new Request(url),env)).status).toBe(200);
+ });
  it("completes static authorization code + PKCE + refresh rotation",async()=>{
   const OAUTH_KV=kv(),env:any={OAUTH_KV,MCP_TOKEN:"approval-secret",MCP_OAUTH_CLIENT_ID:"github-mcp-client",MCP_OAUTH_CLIENT_SECRET:"oauth-client-secret-long-enough",PUBLIC_ORIGIN:"https://proxy.example"};
   const verifier="verifier-string-with-sufficient-entropy-0123456789",challenge=await sha256Base64Url(verifier);

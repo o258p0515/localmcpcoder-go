@@ -40,13 +40,28 @@ if(workerDomain){
 }else{
   throw new Error("No existing Worker-backed hostname or free proxy hostname was found. Preserve existing DNS; choose an unused hostname in the same Cloudflare zone.");
 }
+const legacyDomain="github-mcp-proxy-5b1b15.o258p0515.dpdns.org";
+const legacyInZone=legacyDomain===zone.name||legacyDomain.endsWith("."+zone.name);
+let publicDomain=workerDomain;
+const workerRoutes=[{pattern:workerDomain,custom_domain:true}];
+if(legacyInZone&&workerDomain!==legacyDomain){
+  const legacyRecords=await dnsRecords(legacyDomain);
+  const occupied=legacyRecords.some(record=>["A","AAAA","CNAME"].includes(record.type));
+  if(pointsToWorkersDev(legacyRecords)||!occupied){
+    workerRoutes.push({pattern:legacyDomain,custom_domain:true});
+    publicDomain=legacyDomain;
+    console.error("Keeping the existing ChatGPT connector hostname as a compatibility alias.");
+  }else{
+    console.error("Legacy connector hostname has unrelated DNS records; preserving them and not attaching the alias.");
+  }
+}
 const namespaces=await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces?per_page=100");
 async function ensure(title){const found=namespaces.find(x=>x.title===title);if(found)return found.id;return (await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces",{method:"POST",body:JSON.stringify({title})})).id;}
 const oauth=await ensure("github-mcp-oauth-kv"),cache=await ensure("github-mcp-cache-kv");
 let cfg=await readFile(new URL("../wrangler.jsonc",import.meta.url),"utf8");
-cfg=cfg.replaceAll("__CF_ACCOUNT_ID__",zone.account.id).replaceAll("__CF_DOMAIN__",workerDomain).replaceAll("__OAUTH_KV_ID__",oauth).replaceAll("__CACHE_KV_ID__",cache);
+cfg=cfg.replaceAll("__CF_ACCOUNT_ID__",zone.account.id).replaceAll("__WORKER_ROUTES__",JSON.stringify(workerRoutes)).replaceAll("__PUBLIC_DOMAIN__",publicDomain).replaceAll("__OAUTH_KV_ID__",oauth).replaceAll("__CACHE_KV_ID__",cache);
 await writeFile(new URL("../wrangler.deploy.jsonc",import.meta.url),cfg);
-await writeFile(new URL("../worker-endpoint.txt",import.meta.url),"https://"+workerDomain+"/mcp\n");
-if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,"## GitHub MCP Proxy endpoint\n\nhttps://"+workerDomain+"/mcp\n");
+await writeFile(new URL("../worker-endpoint.txt",import.meta.url),"https://"+publicDomain+"/mcp\n");
+if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,"## GitHub MCP Proxy endpoint\n\nhttps://"+publicDomain+"/mcp\n");
 if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,"CLOUDFLARE_ACCOUNT_ID="+zone.account.id+"\nCLOUDFLARE_API_KEY="+key+"\nCLOUDFLARE_EMAIL="+email+"\nWORKER_DOMAIN="+workerDomain+"\n");
 console.error("Prepared Cloudflare deployment config for "+workerDomain+"; account and credentials are not printed.");

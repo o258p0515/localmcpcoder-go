@@ -18,6 +18,7 @@ func (r *Registry) walk(root string,fn func(string,fs.DirEntry)bool){
   if e!=nil{return nil}
   rel,err:=filepath.Rel(root,p);if err!=nil{return nil}
   depth:=0;if rel!="."{depth=len(strings.Split(filepath.Clean(rel),string(filepath.Separator)))}
+  if d.Type()&fs.ModeSymlink!=0{return nil}
   if d.IsDir()&&p!=root{if ignored[d.Name()]||depth>25{return filepath.SkipDir}}
   if !d.IsDir()&&!fn(p,d){return stopWalk}
   return nil

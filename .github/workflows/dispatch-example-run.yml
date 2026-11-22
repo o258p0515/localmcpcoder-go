@@ -1,0 +1,25 @@
+name: Dispatch example MCP runner
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/example-run.yml
+      - .github/workflows/dispatch-example-run.yml
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch the MCP runner workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/example-run.yml/dispatches" \
+            -f ref=main
+          echo "Dispatched Example remote MCP runner on main."

@@ -18,18 +18,27 @@ if(!workersSubdomain){
 }else{
   console.error("Reusing the existing account workers.dev subdomain.");
 }
-async function hasManagedDns(hostname){
-  const records=await cf("/zones/"+zone.id+"/dns_records?name="+encodeURIComponent(hostname));
-  return records.some(record=>["A","AAAA","CNAME"].includes(record.type));
+async function dnsRecords(hostname){
+  return cf("/zones/"+zone.id+"/dns_records?name="+encodeURIComponent(hostname));
 }
-let workerDomain=domain;
-if(await hasManagedDns(workerDomain)){
-  const candidates=["github-mcp-proxy."+zone.name,"github-mcp-proxy-"+zone.account.id.slice(0,6).toLowerCase()+"."+zone.name];
-  const available=[];
-  for(const candidate of candidates){if(!await hasManagedDns(candidate)){available.push(candidate);break;}}
-  if(!available.length)throw new Error("CF_DOMAIN already has externally managed DNS records and no free proxy hostname was found. Preserve existing DNS; choose an unused hostname in the same Cloudflare zone.");
-  workerDomain=available[0];
-  console.error("CF_DOMAIN already has DNS records; preserving them and using a separate Worker hostname.");
+function pointsToWorkersDev(records){
+  return records.some(record=>record.type==="CNAME"&&String(record.content||"").toLowerCase().endsWith(".workers.dev"));
+}
+const candidates=[domain,"github-mcp-proxy."+zone.name,"github-mcp-proxy-"+zone.account.id.slice(0,6).toLowerCase()+"."+zone.name];
+let workerDomain="";
+let availableDomain="";
+for(const candidate of [...new Set(candidates)]){
+  const records=await dnsRecords(candidate);
+  if(pointsToWorkersDev(records)){workerDomain=candidate;break;}
+  if(!availableDomain&&!records.some(record=>["A","AAAA","CNAME"].includes(record.type)))availableDomain=candidate;
+}
+if(workerDomain){
+  console.error("Reusing the existing Worker-backed hostname to keep the MCP connector URL stable.");
+}else if(availableDomain){
+  workerDomain=availableDomain;
+  console.error("Using an unused hostname while preserving externally managed DNS records.");
+}else{
+  throw new Error("No existing Worker-backed hostname or free proxy hostname was found. Preserve existing DNS; choose an unused hostname in the same Cloudflare zone.");
 }
 const namespaces=await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces?per_page=100");
 async function ensure(title){const found=namespaces.find(x=>x.title===title);if(found)return found.id;return (await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces",{method:"POST",body:JSON.stringify({title})})).id;}

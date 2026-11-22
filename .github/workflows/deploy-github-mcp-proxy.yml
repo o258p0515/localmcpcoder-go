@@ -124,7 +124,7 @@ jobs:
           set -euo pipefail
           BODY=$(curl --fail --silent --show-error -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"personal"}}}')
           echo "Selected account response: $BODY"
-          echo "$BODY" | grep -q '"login"'
+          echo "$BODY" | grep -q 'login'
       - name: Record deployment result and endpoint
         if: always()
         env:

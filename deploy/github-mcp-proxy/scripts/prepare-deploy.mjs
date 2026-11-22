@@ -47,12 +47,25 @@ const workerRoutes=[{pattern:workerDomain,custom_domain:true}];
 if(legacyInZone&&workerDomain!==legacyDomain){
   const legacyRecords=await dnsRecords(legacyDomain);
   const occupied=legacyRecords.some(record=>["A","AAAA","CNAME"].includes(record.type));
-  if(pointsToWorkersDev(legacyRecords)||!occupied){
+  let legacyProxyIsLive=false;
+  try{
+    const response=await fetch("https://"+legacyDomain+"/health",{signal:AbortSignal.timeout(8000)});
+    if(response.ok){
+      const health=await response.json();
+      legacyProxyIsLive=health?.status==="ok"&&health?.service==="github-mcp-proxy";
+    }
+  }catch{}
+  if(legacyProxyIsLive){
+    // Keep the already-working connector hostname. Its existing DNS and Worker
+    // routing are externally managed, so do not replace or attach a new route.
+    publicDomain=legacyDomain;
+    console.error("Reusing the healthy legacy MCP connector hostname; preserving its existing DNS and route.");
+  }else if(pointsToWorkersDev(legacyRecords)||!occupied){
     workerRoutes.push({pattern:legacyDomain,custom_domain:true});
     publicDomain=legacyDomain;
     console.error("Keeping the existing ChatGPT connector hostname as a compatibility alias.");
   }else{
-    console.error("Legacy connector hostname has unrelated DNS records; preserving them and not attaching the alias.");
+    console.error("Legacy connector hostname is occupied but does not serve this proxy; preserving its DNS and not attaching it.");
   }
 }
 const namespaces=await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces?per_page=100");

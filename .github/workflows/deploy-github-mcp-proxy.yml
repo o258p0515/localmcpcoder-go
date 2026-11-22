@@ -70,7 +70,6 @@ jobs:
           set -euo pipefail
           node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.deploy.jsonc
       - name: Smoke test Worker health endpoints
-        env:
         run: |
           set -euo pipefail
           sleep 5
@@ -81,14 +80,12 @@ jobs:
           echo "Public endpoint health: $PUBLIC_HEALTH"
           echo "$PUBLIC_HEALTH" | grep -q '"status":"ok"'
       - name: Smoke test OAuth metadata
-        env:
         run: |
           set -euo pipefail
           META=$(curl --fail --silent --show-error "https://$WORKER_DOMAIN/.well-known/oauth-authorization-server")
           echo "OAuth metadata: $META"
           echo "$META" | grep -q '"registration_endpoint"'
       - name: Smoke test unauthenticated request is rejected
-        env:
         run: |
           set -euo pipefail
           STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' -D /tmp/mcp-unauth-headers -X POST "https://$WORKER_DOMAIN/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')

@@ -4,12 +4,21 @@ const account:any={username:"me",token:"ghp_test",description:"test",orgs:[],ena
 const env:any={};
 describe("upstream HTTP diagnostics",()=>{
  afterEach(()=>{vi.unstubAllGlobals();clearUpstreamSessions();});
- it("does not misclassify an ordinary 404 as an expired MCP session",async()=>{
+ it("preserves an initial HTTP 404 instead of misclassifying it as an expired session",async()=>{
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValueOnce(new Response("Not Found: invalid upstream endpoint",{status:404,headers:{"Content-Type":"text/plain","X-GitHub-Request-Id":"req-1"}})));
+  await expect(callUpstream(env,account,"personal",{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"get_me",arguments:{}}})).rejects.toThrow(/HTTP 404.*request_id=req-1.*Not Found/);
+ });
+ it("reinitializes when an established MCP session returns HTTP 404",async()=>{
   const fetch=vi.fn()
    .mockResolvedValueOnce(new Response(JSON.stringify({jsonrpc:"2.0",id:"proxy-init",result:{protocolVersion:"2025-03-26"}}),{status:200,headers:{"Content-Type":"application/json","Mcp-Session-Id":"s1"}}))
    .mockResolvedValueOnce(new Response("",{status:202}))
-   .mockResolvedValueOnce(new Response("Not Found: /user/repos",{status:404,headers:{"Content-Type":"text/plain","X-GitHub-Request-Id":"req-1"}}));
+   .mockResolvedValueOnce(new Response("Not Found",{status:404,headers:{"Content-Type":"text/plain"}}))
+   .mockResolvedValueOnce(new Response(JSON.stringify({jsonrpc:"2.0",id:"proxy-init",result:{protocolVersion:"2025-03-26"}}),{status:200,headers:{"Content-Type":"application/json","Mcp-Session-Id":"s2"}}))
+   .mockResolvedValueOnce(new Response("",{status:202}))
+   .mockResolvedValueOnce(new Response(JSON.stringify({jsonrpc:"2.0",id:2,result:{content:[{type:"text",text:"ok"}]}}),{status:200,headers:{"Content-Type":"application/json"}}));
   vi.stubGlobal("fetch",fetch);
-  await expect(callUpstream(env,account,"personal",{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"create_repository",arguments:{}}})).rejects.toThrow(/HTTP 404.*request_id=req-1.*Not Found/);
+  const result=await callUpstream(env,account,"personal",{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"get_me",arguments:{}}});
+  expect(result.result.content[0].text).toBe("ok");
+  expect(fetch).toHaveBeenCalledTimes(6);
  });
 });

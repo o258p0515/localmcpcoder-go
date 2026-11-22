@@ -1,6 +1,7 @@
 import {describe,it,expect,vi,afterEach} from "vitest";
 import {handleJsonRpcMessage} from "../src/mcp/proxy-core";
 import {clearAccountCaches} from "../src/rtdb/account-store";
+afterEach(()=>vi.unstubAllGlobals());
 function kv(){const m=new Map<string,string>();return {m,get:async(k:string)=>m.get(k)??null,put:async(k:string,v:string)=>m.set(k,v),delete:async(k:string)=>m.delete(k)} as any;}
 function makeEnv(){return {MCP_TOKEN:"test-secret",RTDB_AUTH_URL:"https://unit.firebaseio.com/accounts.json?auth=x",CACHE_KV:kv(),OAUTH_KV:kv()} as any;}
 describe("proxy core",()=>{

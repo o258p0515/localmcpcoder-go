@@ -17,22 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Stop old public MCP runners
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" --paginate --jq '.workflow_runs[] | select(.name == "Example remote MCP runner" and .status != "completed") | .id' |
-          while read -r run_id; do
-            [ -n "$run_id" ] || continue
-            echo "Cancelling previous public MCP runner $run_id"
-            gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel" || true
-          done
-
+      # The target workflow owns runner exclusivity through concurrency:
+      # group: public-mcp-runner, cancel-in-progress: true.
       - name: Start exactly one fresh public MCP runner
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
+          echo "Dispatching one fresh public MCP runner; concurrency will cancel the previous instance."
           gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/example-run.yml/dispatches" -f ref=main
           echo "Dispatched one fresh public MCP runner."

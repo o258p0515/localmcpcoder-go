@@ -57,27 +57,41 @@ jobs:
           for name in CF_API_EMAIL CF_API_KEY CF_DOMAIN; do
             if [ -z "${!name:-}" ]; then echo "::error::$name repository secret is required"; exit 1; fi
           done
-          # CF_DOMAIN must be the complete public hostname, e.g. mcp.example.com.
-          HOST="$CF_DOMAIN"
+          # CF_DOMAIN must be a bare hostname, e.g. mcp.example.com (no scheme/path).
+          HOST="$(printf '%s' "$CF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')"
+          if [[ ! "$HOST" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]; then
+            echo "::error::CF_DOMAIN must be a bare DNS hostname (for example mcp.example.com); do not include https://, a path, or a port."
+            exit 1
+          fi
           API="https://api.cloudflare.com/client/v4"
           cf_api() {
-            method="$1"; path="$2"; data="${3:-}"
-            if [ -n "$data" ]; then
-              curl --fail-with-body --silent --show-error -X "$method" "$API$path" \
-                -H "X-Auth-Email: $CF_API_EMAIL" -H "X-Auth-Key: $CF_API_KEY" \
-                -H "Content-Type: application/json" --data "$data"
-            else
-              curl --fail-with-body --silent --show-error -X "$method" "$API$path" \
-                -H "X-Auth-Email: $CF_API_EMAIL" -H "X-Auth-Key: $CF_API_KEY" \
-                -H "Content-Type: application/json"
+            local method="$1" path="$2" data="${3:-}" response status body
+            local -a args
+            args=(--silent --show-error --write-out $'\n%{http_code}' -X "$method" "$API$path"
+              -H "X-Auth-Email: $CF_API_EMAIL" -H "X-Auth-Key: $CF_API_KEY"
+              -H "Content-Type: application/json")
+            if [ -n "$data" ]; then args+=(--data "$data"); fi
+            if ! response="$(curl "${args[@]}")"; then
+              echo "::error::Cloudflare API transport failure: $method $path" >&2
+              return 1
             fi
+            status="${response##*$'\n'}"
+            body="${response%$'\n'*}"
+            if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+              echo "::error::Cloudflare API returned HTTP $status for $method $path" >&2
+              # Cloudflare error bodies contain diagnostic codes/messages, not credentials.
+              printf '%s\n' "$body" | jq -c . >&2 2>/dev/null || printf '%s\n' "$body" >&2
+              return 1
+            fi
+            printf '%s' "$body"
           }
           # Find the most specific Cloudflare zone matching the hostname.
           ZONE_JSON=""
           IFS='.' read -r -a LABELS <<< "$HOST"
           for ((i=0; i<${#LABELS[@]}-1; i++)); do
             CANDIDATE="$(IFS=.; echo "${LABELS[*]:i}")"
-            RESPONSE="$(cf_api GET "/zones?name=$CANDIDATE")"
+            ENCODED_CANDIDATE="$(jq -rn --arg value "$CANDIDATE" '$value | @uri')"
+            RESPONSE="$(cf_api GET "/zones?name=$ENCODED_CANDIDATE")"
             if [ "$(jq -r '.success' <<<"$RESPONSE")" != "true" ]; then
               jq -c '.errors' <<<"$RESPONSE" >&2
               exit 1
@@ -90,7 +104,8 @@ jobs:
           if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "null" ]; then echo "::error::Cloudflare zone response has no account id"; exit 1; fi
 
           TUNNEL_NAME="localmcpcoder-${HOST//./-}"
-          RESPONSE="$(cf_api GET "/accounts/$ACCOUNT_ID/cfd_tunnel?name=$TUNNEL_NAME&is_deleted=false")"
+          ENCODED_TUNNEL_NAME="$(jq -rn --arg value "$TUNNEL_NAME" '$value | @uri')"
+          RESPONSE="$(cf_api GET "/accounts/$ACCOUNT_ID/cfd_tunnel?name=$ENCODED_TUNNEL_NAME&is_deleted=false")"
           [ "$(jq -r '.success' <<<"$RESPONSE")" = "true" ] || { jq -c '.errors' <<<"$RESPONSE" >&2; exit 1; }
           TUNNEL_ID="$(jq -r '.result[0].id // empty' <<<"$RESPONSE")"
           if [ -z "$TUNNEL_ID" ]; then

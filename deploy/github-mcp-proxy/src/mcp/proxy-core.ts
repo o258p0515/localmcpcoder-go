@@ -49,7 +49,10 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
    if(!resolved.ok){const available=resolved.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("Invalid or missing 'account' parameter (received: "+JSON.stringify(alias)+"). This proxy does NOT auto-fallback. Retry with a valid alias:\n"+available,true));}
    const account=resolved.account;
    const writeTool=/(?:^|_)(?:write|create|update|delete|push|merge|add|remove|fork|dismiss|submit|request|close|reopen|assign|cancel|rerun|enable|disable|set|put|patch)(?:_|$)/i;
-   if(account.readonly&&writeTool.test(name))return result(msg.id,textResult("Account '"+alias+"' is read-only; this write operation is blocked.",true));
+   // This tool starts a repository security scan even though its name does not
+   // contain a conventional write verb. Treat it as mutating for read-only accounts.
+   const explicitlyMutatingTools=new Set(["run_secret_scanning"]);
+   if(account.readonly&&(writeTool.test(name)||explicitlyMutatingTools.has(name)))return result(msg.id,textResult("Account '"+alias+"' is read-only; this write operation is blocked.",true));
    delete args.account;const start=Date.now();let status="ok";
    try{
     if(name==="create_repository"){

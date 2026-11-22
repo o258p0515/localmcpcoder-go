@@ -12,13 +12,17 @@ async function createRepositoryWithRest(account:import("../types").RtdbAccount,a
  if(!name)return textResult("create_repository requires a non-empty name.",true);
  const organization=typeof args.organization==="string"?args.organization.trim():"";
  const endpoint=organization?"https://api.github.com/orgs/"+encodeURIComponent(organization)+"/repos":"https://api.github.com/user/repos";
+ const apiHeaders={Authorization:"Bearer "+account.token,Accept:"application/vnd.github+json","Content-Type":"application/json","X-GitHub-Api-Version":"2022-11-28","User-Agent":"localmcpcoder-github-mcp-proxy"};
+ const identityResponse=await fetch("https://api.github.com/user",{headers:apiHeaders});
+ const identityRaw=await identityResponse.text();let identity:any;try{identity=identityRaw?JSON.parse(identityRaw):{};}catch{identity={};}
+ const tokenType=account.token.startsWith("github_pat_")?"fine-grained PAT":account.token.startsWith("ghp_")?"classic PAT":account.token.startsWith("ghu_")?"GitHub App user token":account.token.startsWith("ghs_")?"GitHub App installation token":account.token.startsWith("gho_")?"OAuth token":account.token.startsWith("ghr_")?"refresh token":"unknown";
  const payload={name,description:typeof args.description==="string"?args.description:undefined,private:args.private!==false,auto_init:args.autoInit===true};
- const response=await fetch(endpoint,{method:"POST",headers:{Authorization:"Bearer "+account.token,Accept:"application/vnd.github+json","Content-Type":"application/json","X-GitHub-Api-Version":"2022-11-28","User-Agent":"localmcpcoder-github-mcp-proxy"},body:JSON.stringify(payload)});
+ const response=await fetch(endpoint,{method:"POST",headers:apiHeaders,body:JSON.stringify(payload)});
  const raw=await response.text();let data:any;try{data=raw?JSON.parse(raw):{};}catch{data={message:raw.slice(0,1000)};}
  if(!response.ok){
   const required=response.headers.get("X-Accepted-GitHub-Permissions");
   const requestId=response.headers.get("X-GitHub-Request-Id");
-  return textResult({error:"GitHub repository creation failed",status:response.status,message:data?.message||"Unknown GitHub API error",errors:data?.errors||undefined,required_permissions:required||undefined,request_id:requestId||undefined,endpoint},true);
+  return textResult({error:"GitHub repository creation failed",status:response.status,message:data?.message||"Unknown GitHub API error",errors:data?.errors||undefined,required_permissions:required||undefined,request_id:requestId||undefined,endpoint,authentication:{identity_status:identityResponse.status,login:identity?.login||null,token_type:tokenType,oauth_scopes:identityResponse.headers.get("X-OAuth-Scopes")||null,accepted_permissions:identityResponse.headers.get("X-Accepted-GitHub-Permissions")||null}},true);
  }
  return textResult({message:"Repository created successfully",repository:{id:data.id,full_name:data.full_name,html_url:data.html_url,private:data.private,default_branch:data.default_branch}});
 }

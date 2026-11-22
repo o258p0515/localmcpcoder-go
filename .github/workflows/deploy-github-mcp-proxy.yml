@@ -49,7 +49,12 @@ jobs:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
         run: node scripts/prepare-deploy.mjs
-      - name: Publish selected Worker endpoint
+      - name: Enforce immutable MCP connector hostname
+        run: |
+          set -euo pipefail
+          test "$WORKER_DOMAIN" = "github-mcp-proxy.o258p0515.dpdns.org"
+          test "$PUBLIC_DOMAIN" = "github-mcp-proxy.o258p0515.dpdns.org"
+      - name: Publish fixed Worker endpoint
         uses: actions/upload-artifact@v4
         with:
           name: github-mcp-proxy-endpoint

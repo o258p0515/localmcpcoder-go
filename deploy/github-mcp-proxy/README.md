@@ -43,7 +43,7 @@ Encode the Firebase Service Account JSON file as one-line Base64:
 
 ## GitHub Repository Secrets
 
-If the Cloudflare account has no workers.dev subdomain yet, the deployment script provisions an account-level subdomain automatically; the Worker itself is configured to serve only a custom domain. If CF_DOMAIN already has A/AAAA/CNAME records, they are preserved and the deployment selects an unused github-mcp-proxy hostname in the same zone. The selected WORKER_DOMAIN is printed in the deploy log. The deployment workflow uses these preconfigured secrets: CF_API_EMAIL, CF_API_KEY, CF_DOMAIN, MCP_TOKEN, MCP_OAUTH_CLIENT_ID, MCP_OAUTH_CLIENT_SECRET, MCP_OAUTH_REDIRECT_URIS, TS_TRUST_CREDS, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT_JSON_B64, RTDB_URL, and RTDB_AUTH_URL.
+The MCP connector always uses the fixed URL https://github-mcp-proxy.o258p0515.dpdns.org/mcp. The deployment script preserves the existing proxied DNS record and binds the Worker to that hostname through a zone route; it fails instead of choosing a generated or alternate hostname if the fixed DNS route is not configured. Deployments never change the connector URL. The workflow uses these preconfigured secrets: CF_API_EMAIL, CF_API_KEY, CF_DOMAIN, MCP_TOKEN, MCP_OAUTH_CLIENT_ID, MCP_OAUTH_CLIENT_SECRET, MCP_OAUTH_REDIRECT_URIS, TS_TRUST_CREDS, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT_JSON_B64, RTDB_URL, and RTDB_AUTH_URL.
 
 Runtime Firebase auth priority: FIREBASE_SERVICE_ACCOUNT_JSON_B64 → FIREBASE_SERVICE_ACCOUNT_JSON → fallback RTDB_AUTH_URL. When using Service Account, set RTDB_URL to the clean URL ending in /github_accounts.json (the Worker also checks /env/github_accounts.json if the direct node is empty). Otherwise RTDB_AUTH_URL must include ?auth=....
 
@@ -55,4 +55,4 @@ MCP_OAUTH_REDIRECT_URIS and TS_TRUST_CREDS are deliberately ignored and never se
 - Gemini CLI / Cursor / Windsurf / Grok / custom agents: Streamable HTTP URL https://<WORKER_DOMAIN>/mcp, with Authorization: Bearer <MCP_TOKEN> or X-API-Key: <MCP_TOKEN>. Optional X-GitHub-Account: <alias> pins an account.
 - Legacy clients: https://<WORKER_DOMAIN>/sse with the same static token or OAuth access token.
 
-Before using GitHub tools, call list_github_accounts and pass the exact alias as the required account argument. Invalid aliases never fall back to another account.
+Before using GitHub tools, call list_github_accounts and pass the exact alias as the required account argument.

@@ -26,7 +26,7 @@ describe("upstream HTTP diagnostics",()=>{
   const fetch=vi.fn()
    .mockResolvedValueOnce(new Response(JSON.stringify({jsonrpc:"2.0",id:"proxy-init",result:{protocolVersion:"2025-03-26"}}),{status:200,headers:{"Content-Type":"application/json","Mcp-Session-Id":"sse1"}}))
    .mockResolvedValueOnce(new Response("",{status:202}))
-   .mockResolvedValueOnce(new Response('event: message\\r\\ndata: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"sse-ok"}]}}\\r\\n\\r\\n',{status:200,headers:{"Content-Type":"text/event-stream"}}));
+   .mockResolvedValueOnce(new Response('event: message\r\ndata: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"sse-ok"}]}}\r\n\r\n',{status:200,headers:{"Content-Type":"text/event-stream"}}));
   vi.stubGlobal("fetch",fetch);
   const result=await callUpstream(env,account,"personal",{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"get_me",arguments:{}}});
   expect(result.result.content[0].text).toBe("sse-ok");

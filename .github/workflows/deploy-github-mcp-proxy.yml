@@ -69,25 +69,73 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.deploy.jsonc
-      - name: Post-deploy smoke tests
+      - name: Smoke test Worker health endpoints
         env:
+          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
+          PUBLIC_DOMAIN: ${{ env.PUBLIC_DOMAIN }}
+        run: |
+          set -euo pipefail
+          sleep 5
+          HEALTH=$(curl --fail --silent --show-error "https://$WORKER_DOMAIN/health")
+          echo "Worker health: $HEALTH"
+          echo "$HEALTH" | grep -q '"status":"ok"'
+          PUBLIC_HEALTH=$(curl --fail --silent --show-error "https://$PUBLIC_DOMAIN/health")
+          echo "Public endpoint health: $PUBLIC_HEALTH"
+          echo "$PUBLIC_HEALTH" | grep -q '"status":"ok"'
+      - name: Smoke test OAuth metadata
+        env:
+          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
+        run: |
+          set -euo pipefail
+          META=$(curl --fail --silent --show-error "https://$WORKER_DOMAIN/.well-known/oauth-authorization-server")
+          echo "OAuth metadata: $META"
+          echo "$META" | grep -q '"registration_endpoint"'
+      - name: Smoke test unauthenticated request is rejected
+        env:
+          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
+        run: |
+          set -euo pipefail
+          STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' -D /tmp/mcp-unauth-headers -X POST "https://$WORKER_DOMAIN/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+          echo "Unauthenticated HTTP status: $STATUS"
+          test "$STATUS" = "401"
+          grep -qi 'WWW-Authenticate: Bearer resource_metadata=' /tmp/mcp-unauth-headers
+      - name: Smoke test authenticated MCP initialize
+        env:
+          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
-          BASE="https://$WORKER_DOMAIN"
-          sleep 5
-          curl --fail --silent --show-error "$BASE/health" | grep -q '"status":"ok"'
-          PUBLIC_BASE="https://$PUBLIC_DOMAIN"
-          curl --fail --silent --show-error "$PUBLIC_BASE/health" | grep -q '"status":"ok"'
-          curl --fail --silent --show-error "$BASE/.well-known/oauth-authorization-server" | grep -q '"registration_endpoint"'
-          STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' -D /tmp/mcp-unauth-headers -X POST "$BASE/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
-          test "$STATUS" = "401"
-          grep -qi 'WWW-Authenticate: Bearer resource_metadata=' /tmp/mcp-unauth-headers
-          curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' | grep -q 'github-mcp-proxy'
-          curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' | tee /tmp/mcp-tools.json | grep -q 'list_github_accounts'
-          grep -q '"account"' /tmp/mcp-tools.json
-          curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}' | grep -q 'isError'
-          curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"personal"}}}' | grep -q '"login"'
+          BODY=$(curl --fail --silent --show-error -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}')
+          echo "MCP initialize response: $BODY"
+          echo "$BODY" | grep -q 'github-mcp-proxy'
+      - name: Smoke test dynamic tool catalog
+        env:
+          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          BODY=$(curl --fail --silent --show-error -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')
+          echo "Tool catalog response bytes: ${#BODY}"
+          echo "$BODY" | grep -q 'list_github_accounts'
+          echo "$BODY" | grep -q '"account"'
+      - name: Smoke test invalid account guard
+        env:
+          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          BODY=$(curl --fail --silent --show-error -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}')
+          echo "Invalid account response: $BODY"
+          echo "$BODY" | grep -q 'isError'
+      - name: Smoke test selected GitHub account
+        env:
+          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          BODY=$(curl --fail --silent --show-error -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"personal"}}}')
+          echo "Selected account response: $BODY"
+          echo "$BODY" | grep -q '"login"'
       - name: Record deployment result and endpoint
         if: always()
         env:

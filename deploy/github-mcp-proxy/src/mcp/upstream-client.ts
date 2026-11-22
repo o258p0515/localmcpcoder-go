@@ -4,7 +4,7 @@ const sessions=new Map<string,string>();
 const initialized=new Set<string>();
 function safeExcerpt(value:string):string{return redactSecrets(value).slice(0,1200);}
 function isExpiredSession(status:number,body:string,hadSession:boolean):boolean{
- if(!hadSession||status!==404)return false;
+ if(!hadSession||![400,404].includes(status))return false;
  return /session (?:not found|expired|does not exist)|unknown session|invalid session/i.test(body);
 }
 async function request(env:Env,account:RtdbAccount,alias:string,message:any,session?:string):Promise<any>{

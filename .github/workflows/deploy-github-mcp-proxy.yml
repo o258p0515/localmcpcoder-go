@@ -7,7 +7,7 @@ on:
       - '.github/workflows/deploy-github-mcp-proxy.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: github-mcp-proxy-deploy
   cancel-in-progress: true
@@ -84,4 +84,27 @@ jobs:
           grep -q '"account"' /tmp/mcp-tools.json
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}' | grep -q 'isError'
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"personal"}}}' | grep -q '"login"'
+      - name: Record verified endpoint and deployment result
+        if: success()
+        env:
+          DEPLOYED_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          PUBLIC_DOMAIN: ${{ env.PUBLIC_DOMAIN }}
+        run: |
+          set -euo pipefail
+          cat > deployment-status.json <<EOF
+          {
+            "status": "success",
+            "workflow_run_id": "$RUN_ID",
+            "deployed_commit": "$DEPLOYED_SHA",
+            "endpoint": "https://$PUBLIC_DOMAIN/mcp",
+            "smoke_tests": ["health", "oauth_metadata", "unauthenticated_401", "initialize", "tools_list", "invalid_account_guard", "get_me"]
+          }
+          EOF
+          cd ../..
+          git add -f deploy/github-mcp-proxy/worker-endpoint.txt deploy/github-mcp-proxy/deployment-status.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(deploy): record verified MCP proxy endpoint [skip ci]"
+          git push
 # Publish the generated endpoint as a short-lived workflow artifact.

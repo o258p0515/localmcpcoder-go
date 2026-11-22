@@ -5,9 +5,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "account_id": "__CF_ACCOUNT_ID__",
   "workers_dev": false,
-  "routes": [{ "pattern": "__CF_DOMAIN__", "custom_domain": true }],
+  "routes": __WORKER_ROUTES__,
   "vars": {
-    "PUBLIC_ORIGIN": "https://__CF_DOMAIN__",
+    "PUBLIC_ORIGIN": "https://__PUBLIC_DOMAIN__",
     "GITHUB_MCP_UPSTREAM_URL": "https://api.githubcopilot.com/mcp/",
     "RTDB_CACHE_TTL_SECONDS": "300"
   },

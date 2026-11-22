@@ -2,6 +2,7 @@ package tools
 
 import (
  "context"
+ "io/fs"
  "os"
  "path/filepath"
  "strings"
@@ -37,6 +38,6 @@ func TestWalkStopsWhenCallbackReturnsFalse(t *testing.T) {
  }
  r:=&Registry{}
  count:=0
- r.walk(root,func(string,os.DirEntry)bool{count++;return false})
+ r.walk(root,func(string,fs.DirEntry)bool{count++;return false})
  if count!=1{t.Fatalf("walk should stop after first file, visited %d",count)}
 }

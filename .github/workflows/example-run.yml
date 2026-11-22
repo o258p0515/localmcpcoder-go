@@ -54,9 +54,17 @@ jobs:
           CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
         run: |
           set -euo pipefail
+          # Strip accidental whitespace/newlines from copied GitHub secrets before building HTTP headers.
+          CF_API_EMAIL="$(printf '%s' "${CF_API_EMAIL:-}" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          CF_API_KEY="$(printf '%s' "${CF_API_KEY:-}" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          CF_DOMAIN="$(printf '%s' "${CF_DOMAIN:-}" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           for name in CF_API_EMAIL CF_API_KEY CF_DOMAIN; do
             if [ -z "${!name:-}" ]; then echo "::error::$name repository secret is required"; exit 1; fi
           done
+          if [[ ! "$CF_API_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+            echo "::error::CF_API_EMAIL must contain the Cloudflare account email address (not an API key/token); check the repository secret value."
+            exit 1
+          fi
           # CF_DOMAIN must be a bare hostname, e.g. mcp.example.com (no scheme/path).
           HOST="$(printf '%s' "$CF_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')"
           if [[ ! "$HOST" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]; then

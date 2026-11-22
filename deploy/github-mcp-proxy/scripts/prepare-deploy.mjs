@@ -47,25 +47,20 @@ const workerRoutes=[{pattern:workerDomain,custom_domain:true}];
 if(legacyInZone&&workerDomain!==legacyDomain){
   const legacyRecords=await dnsRecords(legacyDomain);
   const occupied=legacyRecords.some(record=>["A","AAAA","CNAME"].includes(record.type));
-  let legacyProxyIsLive=false;
-  try{
-    const response=await fetch("https://"+legacyDomain+"/health",{signal:AbortSignal.timeout(8000)});
-    if(response.ok){
-      const health=await response.json();
-      legacyProxyIsLive=health?.status==="ok"&&health?.service==="github-mcp-proxy";
-    }
-  }catch{}
-  if(legacyProxyIsLive){
-    // Keep the already-working connector hostname. Its existing DNS and Worker
-    // routing are externally managed, so do not replace or attach a new route.
+  const proxiedLegacyDns=legacyRecords.some(record=>record.proxied===true&&["A","AAAA","CNAME"].includes(record.type));
+  if(proxiedLegacyDns){
+    // The legacy hostname is already proxied through this Cloudflare zone.
+    // Keep its DNS untouched, but explicitly retain its Worker route on deploy.
+    // Omitting it from Wrangler's routes can detach the connector after publish.
+    workerRoutes.push({pattern:legacyDomain+"/*",zone_name:zone.name});
     publicDomain=legacyDomain;
-    console.error("Reusing the healthy legacy MCP connector hostname; preserving its existing DNS and route.");
+    console.error("Preserving the legacy MCP connector hostname as a proxied Worker route; DNS records remain unchanged.");
   }else if(pointsToWorkersDev(legacyRecords)||!occupied){
     workerRoutes.push({pattern:legacyDomain,custom_domain:true});
     publicDomain=legacyDomain;
     console.error("Keeping the existing ChatGPT connector hostname as a compatibility alias.");
   }else{
-    console.error("Legacy connector hostname is occupied but does not serve this proxy; preserving its DNS and not attaching it.");
+    console.error("Legacy connector hostname is occupied but not proxied; preserving its DNS and not attaching it.");
   }
 }
 const namespaces=await cf("/accounts/"+zone.account.id+"/storage/kv/namespaces?per_page=100");

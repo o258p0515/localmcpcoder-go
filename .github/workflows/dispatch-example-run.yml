@@ -9,17 +9,63 @@ on:
 
 permissions:
   actions: write
+  contents: write
 
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
-      - name: Dispatch the MCP runner workflow
+      - name: Dispatch and observe the MCP runner
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/actions/workflows/example-run.yml/dispatches" \
             -f ref=main
           echo "Dispatched Example remote MCP runner on main."
+
+          RUN_ID=""
+          JOB_ID=""
+          RUN_JSON='{}'
+          JOB_JSON='{}'
+          for attempt in $(seq 1 72); do
+            RUNS="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/example-run.yml/runs?branch=main&event=workflow_dispatch&per_page=20")"
+            RUN_ID="$(jq -r --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | last | .id // empty' <<<"$RUNS")"
+            if [ -n "$RUN_ID" ]; then
+              RUN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+              JOB_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=20")"
+              JOB_ID="$(jq -r '[.jobs[]] | .[0].id // empty' <<<"$JOB_JSON")"
+              CF_STEP_STATUS="$(jq -r '[.jobs[].steps[]? | select(.name == "Provision Cloudflare named tunnel and DNS with Global API Key")][0].status // empty' <<<"$JOB_JSON")"
+              RUN_STATUS="$(jq -r '.status' <<<"$RUN_JSON")"
+              if [ "$CF_STEP_STATUS" = "completed" ] || [ "$RUN_STATUS" = "completed" ]; then
+                break
+              fi
+            fi
+            sleep 10
+          done
+
+          STATUS="$(jq -nc \
+            --arg run_id "$RUN_ID" \
+            --arg run_url "$(jq -r '.html_url // empty' <<<"$RUN_JSON")" \
+            --arg status "$(jq -r '.status // "not-found"' <<<"$RUN_JSON")" \
+            --arg conclusion "$(jq -r '.conclusion // empty' <<<"$RUN_JSON")" \
+            --arg job_id "$JOB_ID" \
+            --arg cloudflare_step_status "$(jq -r '[.jobs[].steps[]? | select(.name == "Provision Cloudflare named tunnel and DNS with Global API Key")][0].status // empty' <<<"$JOB_JSON")" \
+            --arg cloudflare_step_conclusion "$(jq -r '[.jobs[].steps[]? | select(.name == "Provision Cloudflare named tunnel and DNS with Global API Key")][0].conclusion // empty' <<<"$JOB_JSON")" \
+            '{run_id:$run_id,run_url:$run_url,status:$status,conclusion:$conclusion,job_id:$job_id,cloudflare_step_status:$cloudflare_step_status,cloudflare_step_conclusion:$cloudflare_step_conclusion}')"
+          ENCODED="$(printf '%s' "$STATUS" | base64 -w0)"
+          PATH_IN_REPO=".github/runner-dispatch-status.json"
+          FILE_SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/$PATH_IN_REPO" --jq .sha 2>/dev/null || true)"
+          if [ -n "$FILE_SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$PATH_IN_REPO" \
+              -f message="ci: record MCP runner dispatch status" \
+              -f content="$ENCODED" -f branch=main -f sha="$FILE_SHA" >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$PATH_IN_REPO" \
+              -f message="ci: record MCP runner dispatch status" \
+              -f content="$ENCODED" -f branch=main >/dev/null
+          fi
+          echo "Runner dispatch status: $STATUS"

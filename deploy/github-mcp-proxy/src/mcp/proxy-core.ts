@@ -16,7 +16,7 @@ async function createRepositoryWithRest(account:import("../types").RtdbAccount,a
  const identityResponse=await fetch("https://api.github.com/user",{headers:apiHeaders});
  const identityRaw=await identityResponse.text();let identity:any;try{identity=identityRaw?JSON.parse(identityRaw):{};}catch{identity={};}
  const tokenType=account.token.startsWith("github_pat_")?"fine-grained PAT":account.token.startsWith("ghp_")?"classic PAT":account.token.startsWith("ghu_")?"GitHub App user token":account.token.startsWith("ghs_")?"GitHub App installation token":account.token.startsWith("gho_")?"OAuth token":account.token.startsWith("ghr_")?"refresh token":"unknown";
- const payload={name,description:typeof args.description==="string"?args.description:undefined,private:args.private!==false,auto_init:args.autoInit===true};
+ const payload={name,description:typeof args.description==="string"?args.description:undefined,private:args.private===true,auto_init:args.autoInit===true};
  const response=await fetch(endpoint,{method:"POST",headers:apiHeaders,body:JSON.stringify(payload)});
  const raw=await response.text();let data:any;try{data=raw?JSON.parse(raw):{};}catch{data={message:raw.slice(0,1000)};}
  if(!response.ok){

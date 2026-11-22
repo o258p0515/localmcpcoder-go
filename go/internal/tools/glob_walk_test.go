@@ -41,3 +41,16 @@ func TestWalkStopsWhenCallbackReturnsFalse(t *testing.T) {
  r.walk(root,func(string,fs.DirEntry)bool{count++;return false})
  if count!=1{t.Fatalf("walk should stop after first file, visited %d",count)}
 }
+
+func TestWalkDoesNotFollowSymlinkEntries(t *testing.T) {
+ root:=t.TempDir()
+ outside:=t.TempDir()
+ secret:=filepath.Join(outside,"secret.txt")
+ if err:=os.WriteFile(secret,[]byte("outside secret"),0644);err!=nil{t.Fatal(err)}
+ link:=filepath.Join(root,"linked-secret.txt")
+ if err:=os.Symlink(secret,link);err!=nil{t.Skipf("symlinks unavailable: %v",err)}
+ r:=&Registry{}
+ var seen []string
+ r.walk(root,func(path string,_ fs.DirEntry)bool{seen=append(seen,path);return true})
+ for _,path:=range seen{if path==link{t.Fatalf("walk followed symlink entry %s",link)}}
+}

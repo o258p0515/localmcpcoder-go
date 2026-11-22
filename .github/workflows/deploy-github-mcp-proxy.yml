@@ -66,7 +66,9 @@ jobs:
           RTDB_AUTH_URL: ${{ secrets.RTDB_AUTH_URL }}
           FIREBASE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON_B64 }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-        run: node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.deploy.jsonc
+        run: |
+          set -euo pipefail
+          node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.deploy.jsonc
       - name: Post-deploy smoke tests
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}

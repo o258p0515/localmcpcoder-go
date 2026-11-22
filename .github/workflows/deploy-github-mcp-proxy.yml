@@ -71,8 +71,6 @@ jobs:
           node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.deploy.jsonc
       - name: Smoke test Worker health endpoints
         env:
-          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
-          PUBLIC_DOMAIN: ${{ env.PUBLIC_DOMAIN }}
         run: |
           set -euo pipefail
           sleep 5
@@ -84,7 +82,6 @@ jobs:
           echo "$PUBLIC_HEALTH" | grep -q '"status":"ok"'
       - name: Smoke test OAuth metadata
         env:
-          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
         run: |
           set -euo pipefail
           META=$(curl --fail --silent --show-error "https://$WORKER_DOMAIN/.well-known/oauth-authorization-server")
@@ -92,7 +89,6 @@ jobs:
           echo "$META" | grep -q '"registration_endpoint"'
       - name: Smoke test unauthenticated request is rejected
         env:
-          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
         run: |
           set -euo pipefail
           STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' -D /tmp/mcp-unauth-headers -X POST "https://$WORKER_DOMAIN/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
@@ -101,7 +97,6 @@ jobs:
           grep -qi 'WWW-Authenticate: Bearer resource_metadata=' /tmp/mcp-unauth-headers
       - name: Smoke test authenticated MCP initialize
         env:
-          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
@@ -110,7 +105,6 @@ jobs:
           echo "$BODY" | grep -q 'github-mcp-proxy'
       - name: Smoke test dynamic tool catalog
         env:
-          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
@@ -120,7 +114,6 @@ jobs:
           echo "$BODY" | grep -q '"account"'
       - name: Smoke test invalid account guard
         env:
-          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
@@ -129,7 +122,6 @@ jobs:
           echo "$BODY" | grep -q 'isError'
       - name: Smoke test selected GitHub account
         env:
-          WORKER_DOMAIN: ${{ env.WORKER_DOMAIN }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail

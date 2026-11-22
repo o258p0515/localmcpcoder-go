@@ -7,6 +7,21 @@ const INSTRUCTIONS="You are connected to a multi-account GitHub MCP Proxy. Befor
 function result(id:any,value:any){return {jsonrpc:"2.0",id,result:value};}
 function error(id:any,code:number,message:string){return {jsonrpc:"2.0",id,error:{code,message}};}
 function textResult(value:any,isError=false){return {content:[{type:"text",text:typeof value==="string"?value:JSON.stringify(value,null,2)}],...(isError?{isError:true}:{})};}
+async function createRepositoryWithRest(account:import("../types").RtdbAccount,args:Record<string,any>){
+ const name=String(args.name||"").trim();
+ if(!name)return textResult("create_repository requires a non-empty name.",true);
+ const organization=typeof args.organization==="string"?args.organization.trim():"";
+ const endpoint=organization?"https://api.github.com/orgs/"+encodeURIComponent(organization)+"/repos":"https://api.github.com/user/repos";
+ const payload={name,description:typeof args.description==="string"?args.description:undefined,private:args.private!==false,auto_init:args.autoInit===true};
+ const response=await fetch(endpoint,{method:"POST",headers:{Authorization:"Bearer "+account.token,Accept:"application/vnd.github+json","Content-Type":"application/json","X-GitHub-Api-Version":"2022-11-28","User-Agent":"localmcpcoder-github-mcp-proxy"},body:JSON.stringify(payload)});
+ const raw=await response.text();let data:any;try{data=raw?JSON.parse(raw):{};}catch{data={message:raw.slice(0,1000)};}
+ if(!response.ok){
+  const required=response.headers.get("X-Accepted-GitHub-Permissions");
+  const requestId=response.headers.get("X-GitHub-Request-Id");
+  return textResult({error:"GitHub repository creation failed",status:response.status,message:data?.message||"Unknown GitHub API error",errors:data?.errors||undefined,required_permissions:required||undefined,request_id:requestId||undefined,endpoint},true);
+ }
+ return textResult({message:"Repository created successfully",repository:{id:data.id,full_name:data.full_name,html_url:data.html_url,private:data.private,default_branch:data.default_branch}});
+}
 export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):Promise<any|null>{
  if(!msg||msg.jsonrpc!=="2.0"||typeof msg.method!=="string")return error(msg?.id??null,-32600,"Invalid JSON-RPC request");
  if(!("id" in msg))return null;
@@ -31,8 +46,16 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
    const account=resolved.account;
    if(account.readonly&&/^(create|update|delete|push|merge|add|remove|fork|dismiss|submit|request|close|reopen|assign|cancel|rerun|enable|disable|set|put|patch)_|^write/i.test(name))return result(msg.id,textResult("Account '"+alias+"' is read-only; this write operation is blocked.",true));
    delete args.account;const start=Date.now();let status="ok";
-   try{const out=await callUpstream(env,account,alias,{jsonrpc:"2.0",id:msg.id,method:"tools/call",params:{name,arguments:args}});auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status});return out;}
-   catch(e){status="error";auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status});throw e;}
+   try{
+    if(name==="create_repository"){
+     const value=await createRepositoryWithRest(account,args);
+     auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status:value.isError?"error":"ok"});
+     return result(msg.id,value);
+    }
+    const out=await callUpstream(env,account,alias,{jsonrpc:"2.0",id:msg.id,method:"tools/call",params:{name,arguments:args}});
+    auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status});
+    return out;
+   }catch(e){status="error";auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status});throw e;}
   }
   return error(msg.id,-32601,"Method not found: "+msg.method);
  }catch(e){return error(msg.id,-32000,e instanceof Error?e.message:"Internal error");}

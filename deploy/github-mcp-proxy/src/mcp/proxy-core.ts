@@ -69,4 +69,3 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
  }catch(e){return error(msg.id,-32000,e instanceof Error?e.message:"Internal error");}
 }
 export async function handleJsonRpcBatch(msgs:JsonRpc[],env:Env,ctx:AuthContext){const out=await Promise.all(msgs.map(m=>handleJsonRpcMessage(m,env,ctx)));return out.filter(Boolean);}
-   72

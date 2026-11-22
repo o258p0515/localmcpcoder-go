@@ -75,6 +75,8 @@ jobs:
           BASE="https://$WORKER_DOMAIN"
           sleep 5
           curl --fail --silent --show-error "$BASE/health" | grep -q '"status":"ok"'
+          PUBLIC_BASE="https://$PUBLIC_DOMAIN"
+          curl --fail --silent --show-error "$PUBLIC_BASE/health" | grep -q '"status":"ok"'
           curl --fail --silent --show-error "$BASE/.well-known/oauth-authorization-server" | grep -q '"registration_endpoint"'
           STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' -D /tmp/mcp-unauth-headers -X POST "$BASE/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
           test "$STATUS" = "401"
@@ -89,7 +91,6 @@ jobs:
         env:
           DEPLOYED_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
-          PUBLIC_DOMAIN: ${{ env.PUBLIC_DOMAIN }}
         run: |
           set -euo pipefail
           cat > deployment-status.json <<EOF

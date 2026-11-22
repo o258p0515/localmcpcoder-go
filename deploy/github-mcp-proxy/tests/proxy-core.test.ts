@@ -20,6 +20,7 @@ describe("create_repository REST compatibility",()=>{
   const e=makeEnv();await clearAccountCaches(e);const calls:any[]=[];
   vi.stubGlobal("fetch",vi.fn(async(input:any,init:any)=>{
    const url=String(input);if(url.includes("accounts.json"))return Response.json({personal:{username:"me",token:"ghp_test_token_value",enabled:true}});
+   if(url==="https://api.github.com/user")return Response.json({login:"me"},{status:200});
    calls.push({url,init});return Response.json({id:123,full_name:"me/probe-repo",html_url:"https://github.com/me/probe-repo",private:true,default_branch:"main"},{status:201});
   }));
   const r=await handleJsonRpcMessage({jsonrpc:"2.0",id:10,method:"tools/call",params:{name:"create_repository",arguments:{account:"personal",name:"probe-repo",private:true,autoInit:true}}} as any,e,{method:"static_token",subject:"test"});
@@ -28,7 +29,7 @@ describe("create_repository REST compatibility",()=>{
  });
  it("returns GitHub permission diagnostics instead of hiding 404/403 details",async()=>{
   const e=makeEnv();await clearAccountCaches(e);
-  vi.stubGlobal("fetch",vi.fn(async(input:any)=>String(input).includes("accounts.json")?Response.json({personal:{username:"me",token:"ghp_test_token_value",enabled:true}}):new Response(JSON.stringify({message:"Resource not accessible by integration"}),{status:403,headers:{"X-Accepted-GitHub-Permissions":"Administration=write"}})));
+  vi.stubGlobal("fetch",vi.fn(async(input:any)=>{const url=String(input);if(url.includes("accounts.json"))return Response.json({personal:{username:"me",token:"ghp_test_token_value",enabled:true}});if(url==="https://api.github.com/user")return Response.json({login:"me"});return new Response(JSON.stringify({message:"Resource not accessible by integration"}),{status:403,headers:{"X-Accepted-GitHub-Permissions":"Administration=write"}});}));
   const r=await handleJsonRpcMessage({jsonrpc:"2.0",id:11,method:"tools/call",params:{name:"create_repository",arguments:{account:"personal",name:"probe-repo"}}} as any,e,{method:"static_token",subject:"test"});
   expect(r.result.isError).toBe(true);const body=JSON.parse(r.result.content[0].text);expect(body.status).toBe(403);expect(body.required_permissions).toBe("Administration=write");
  });

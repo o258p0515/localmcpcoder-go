@@ -131,7 +131,7 @@ The dist target cross-compiles Linux/macOS/Windows × amd64/arm64 with CGO_ENABL
 
 This is remote code execution as the operating-system user running the server. Anyone holding the passphrase or a valid OAuth access token can run shell commands and read/write files as that user. The filesystem root constrains file tools; it is not a sandbox for shell commands. A shell command can cd elsewhere or access the network. Symlink resolution is performed before path-boundary checks. Keep the server private, use a high-entropy passphrase, restrict client permissions, and stop the process when not in use. Never expose it publicly unless you understand and accept the consequences.
 
-The bash tool removes CF_API_TOKEN, TS_AUTHKEY, MCP_TOKEN, and TUNNEL_TOKEN from its child environment. Tunnel subprocesses also scrub those secrets from their environment; TUNNEL_TOKEN is re-added only to the cloudflared child environment and is never placed in argv.
+The bash tool removes CF_API_TOKEN, CF_API_KEY, TS_AUTHKEY, TS_TRUST_CREDS, MCP_TOKEN, and TUNNEL_TOKEN from its child environment. Tunnel subprocesses also scrub those secrets from their environment; TUNNEL_TOKEN is re-added only to the cloudflared child environment and is never placed in argv.
 
 ## Original Node.js implementation
 

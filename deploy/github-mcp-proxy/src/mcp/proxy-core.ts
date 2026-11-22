@@ -48,7 +48,8 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
    const alias=String(args.account||ctx.pinnedAccount||"");const resolved=await resolveAccount(env,alias);
    if(!resolved.ok){const available=resolved.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("Invalid or missing 'account' parameter (received: "+JSON.stringify(alias)+"). This proxy does NOT auto-fallback. Retry with a valid alias:\n"+available,true));}
    const account=resolved.account;
-   if(account.readonly&&/^(create|update|delete|push|merge|add|remove|fork|dismiss|submit|request|close|reopen|assign|cancel|rerun|enable|disable|set|put|patch)_|^write/i.test(name))return result(msg.id,textResult("Account '"+alias+"' is read-only; this write operation is blocked.",true));
+   const writeTool=/(?:^|_)(?:write|create|update|delete|push|merge|add|remove|fork|dismiss|submit|request|close|reopen|assign|cancel|rerun|enable|disable|set|put|patch)(?:_|$)/i;
+   if(account.readonly&&writeTool.test(name))return result(msg.id,textResult("Account '"+alias+"' is read-only; this write operation is blocked.",true));
    delete args.account;const start=Date.now();let status="ok";
    try{
     if(name==="create_repository"){
@@ -57,7 +58,7 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
      return result(msg.id,value);
     }
     const out=await callUpstream(env,account,alias,{jsonrpc:"2.0",id:msg.id,method:"tools/call",params:{name,arguments:args}});
-    auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status});
+    auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status:out?.result?.isError||out?.error?"error":"ok"});
     return out;
    }catch(e){status="error";auditLog({event:"tool_call",tool:name,account:alias,authMethod:ctx.method,durationMs:Date.now()-start,status});throw e;}
   }

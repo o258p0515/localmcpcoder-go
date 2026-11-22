@@ -7,7 +7,7 @@ function makeEnv(){return {MCP_TOKEN:"test-secret",RTDB_AUTH_URL:"https://unit.f
 describe("proxy core",()=>{
  afterEach(()=>vi.unstubAllGlobals());
  it("rejects missing or invalid account without upstream fallback",async()=>{const e=makeEnv();await clearAccountCaches(e);const fetch=vi.fn(async()=>Response.json({personal:{username:"me",token:"ghp_private",enabled:true}}));vi.stubGlobal("fetch",fetch);const r=await handleJsonRpcMessage({jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"get_me",arguments:{account:"wrong"}}} as any,e,{method:"static_token",subject:"test"});expect(r.result.isError).toBe(true);expect(r.result.content[0].text).toContain("personal");expect(fetch).toHaveBeenCalledTimes(1);});
- it.each(["delete_issue","issue_write","pull_request_review_write","sub_issue_write","create_repository"])("blocks %s on readonly accounts",async(name)=>{const e=makeEnv();await clearAccountCaches(e);const fetch=vi.fn(async()=>Response.json({work:{username:"work",token:"ghp_private",enabled:true,readonly:true}}));vi.stubGlobal("fetch",fetch);const r=await handleJsonRpcMessage({jsonrpc:"2.0",id:2,method:"tools/call",params:{name,arguments:{account:"work",name:"should-not-create"}}} as any,e,{method:"static_token",subject:"test"});expect(r.result.isError).toBe(true);expect(r.result.content[0].text).toContain("read-only");expect(fetch).toHaveBeenCalledTimes(1);});
+ it.each(["delete_issue","issue_write","pull_request_review_write","sub_issue_write","create_repository","run_secret_scanning"])("blocks %s on readonly accounts",async(name)=>{const e=makeEnv();await clearAccountCaches(e);const fetch=vi.fn(async()=>Response.json({work:{username:"work",token:"ghp_private",enabled:true,readonly:true}}));vi.stubGlobal("fetch",fetch);const r=await handleJsonRpcMessage({jsonrpc:"2.0",id:2,method:"tools/call",params:{name,arguments:{account:"work",name:"should-not-create"}}} as any,e,{method:"static_token",subject:"test"});expect(r.result.isError).toBe(true);expect(r.result.content[0].text).toContain("read-only");expect(fetch).toHaveBeenCalledTimes(1);});
 });
  it("forwards the selected PAT and strips account from upstream arguments",async()=>{
   const e=makeEnv();await clearAccountCaches(e);const calls:any[]=[];
@@ -35,3 +35,4 @@ describe("create_repository REST compatibility",()=>{
   expect(r.result.isError).toBe(true);const body=JSON.parse(r.result.content[0].text);expect(body.status).toBe(403);expect(body.required_permissions).toBe("Administration=write");
  });
 });
+   38

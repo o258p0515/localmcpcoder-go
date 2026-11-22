@@ -88,26 +88,31 @@ jobs:
           grep -q '"account"' /tmp/mcp-tools.json
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"__non_existent__"}}}' | grep -q 'isError'
           curl --silent --show-error --fail -X POST "$BASE/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"personal"}}}' | grep -q '"login"'
-      - name: Record verified endpoint and deployment result
-        if: success()
+      - name: Record deployment result and endpoint
+        if: always()
         env:
           DEPLOYED_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           set -euo pipefail
+          ENDPOINT=""
+          if [ -n "${PUBLIC_DOMAIN:-}" ]; then ENDPOINT="https://$PUBLIC_DOMAIN/mcp"; fi
           cat > deployment-status.json <<EOF
           {
-            "status": "success",
+            "status": "$JOB_STATUS",
             "workflow_run_id": "$RUN_ID",
             "deployed_commit": "$DEPLOYED_SHA",
-            "endpoint": "https://$PUBLIC_DOMAIN/mcp",
-            "smoke_tests": ["health", "oauth_metadata", "unauthenticated_401", "initialize", "tools_list", "invalid_account_guard", "get_me"]
+            "endpoint": "$ENDPOINT"
           }
           EOF
           cd ../..
-          git add -f deploy/github-mcp-proxy/worker-endpoint.txt deploy/github-mcp-proxy/deployment-status.json
+          if [ -f deploy/github-mcp-proxy/worker-endpoint.txt ]; then
+            git add -f deploy/github-mcp-proxy/worker-endpoint.txt
+          fi
+          git add -f deploy/github-mcp-proxy/deployment-status.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(deploy): record verified MCP proxy endpoint [skip ci]"
+          git commit -m "chore(deploy): record deployment result [skip ci]"
           git push origin HEAD:refs/heads/main
 # Publish the generated endpoint as a short-lived workflow artifact.

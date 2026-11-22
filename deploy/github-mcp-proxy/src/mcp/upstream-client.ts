@@ -4,7 +4,9 @@ const sessions=new Map<string,string>();
 const initialized=new Set<string>();
 function safeExcerpt(value:string):string{return redactSecrets(value).slice(0,1200);}
 function isExpiredSession(status:number,body:string,hadSession:boolean):boolean{
- if(!hadSession||![400,404].includes(status))return false;
+ if(!hadSession)return false;
+ if(status===404)return true;
+ if(status!==400)return false;
  return /session (?:not found|expired|does not exist)|unknown session|invalid session/i.test(body);
 }
 async function request(env:Env,account:RtdbAccount,alias:string,message:any,session?:string):Promise<any>{
@@ -17,7 +19,7 @@ async function request(env:Env,account:RtdbAccount,alias:string,message:any,sess
  const ct=r.headers.get("Content-Type")||"";
  const raw=await r.text();
  if(!r.ok){
-  if(isExpiredSession(r.status,raw,!!session))return {error:{code:-32000,message:"Upstream MCP session expired; reinitialize"}};
+  if(isExpiredSession(r.status,raw,!!session))return {error:{code:-32000,message:"Upstream MCP session expired; reinitialize (HTTP "+r.status+"): "+safeExcerpt(raw.trim())}};
   const details=["GitHub MCP upstream HTTP "+r.status,"account='"+alias+"'", "method='"+String(message.method||"unknown")+"'"];
   const requestId=r.headers.get("X-GitHub-Request-Id");if(requestId)details.push("request_id="+requestId);
   const permissions=r.headers.get("X-Accepted-GitHub-Permissions");if(permissions)details.push("required_permissions="+permissions);

@@ -5,6 +5,7 @@ import type { Env } from "../src/types";
 class RegistrySQL {
   runners = new Map<string, any>();
   sessions = new Map<string, string>();
+  grants = new Map<string, { grant_type: string; expires_at: number }>();
   exec(query: string, ...args: any[]) {
     if (query.startsWith("INSERT INTO runners")) {
       const [id, os, arch, repo, tags_json, connected_at] = args;
@@ -31,6 +32,19 @@ class RegistrySQL {
     }
     if (query.startsWith("SELECT runner_id FROM session_targets")) {
       const id = this.sessions.get(args[0]); return { rowsWritten: 0, toArray: () => id ? [{ runner_id: id }] : [] };
+    }
+    if (query.startsWith("DELETE FROM oauth_grants WHERE expires_at")) {
+      let count = 0; for (const [jti, grant] of this.grants) if (grant.expires_at <= args[0]) { this.grants.delete(jti); count++; }
+      return { rowsWritten: count, toArray: () => [] };
+    }
+    if (query.startsWith("INSERT INTO oauth_grants")) {
+      this.grants.set(args[0], { grant_type: args[1], expires_at: args[2] }); return { rowsWritten: 1, toArray: () => [] };
+    }
+    if (query.startsWith("SELECT jti FROM oauth_grants")) {
+      const grant = this.grants.get(args[0]); return { rowsWritten: 0, toArray: () => grant && grant.grant_type === args[1] && grant.expires_at > args[2] ? [{ jti: args[0] }] : [] };
+    }
+    if (query.startsWith("DELETE FROM oauth_grants WHERE jti")) {
+      const deleted = this.grants.delete(args[0]); return { rowsWritten: deleted ? 1 : 0, toArray: () => [] };
     }
     if (query.startsWith("INSERT INTO session_targets")) {
       this.sessions.set(args[0], args[1]); return { rowsWritten: 1, toArray: () => [] };
@@ -72,6 +86,14 @@ describe("RegistryDO", () => {
     expect((await (await action(registry, { action: "setSessionRunner", session_key: "s1", runner_id: "r1" })).json() as any).result).toEqual({ session_key: "s1", runner_id: "r1" });
     await action(registry, { action: "setStatus", runner_id: "r1", status: "draining" });
     expect((await action(registry, { action: "setSessionRunner", session_key: "s2", runner_id: "r1" })).status).toBe(500);
+  });
+  it("consumes OAuth grants exactly once", async () => {
+    const { registry, sql } = makeRegistry();
+    const expiry = Date.now() + 60_000;
+    expect((await (await action(registry, { action: "storeOAuthGrant", jti: "code-1", grant_type: "code", expires_at: expiry })).json() as any).result.stored).toBe(true);
+    expect((await (await action(registry, { action: "consumeOAuthGrant", jti: "code-1", grant_type: "code" })).json() as any).result.consumed).toBe(true);
+    expect((await (await action(registry, { action: "consumeOAuthGrant", jti: "code-1", grant_type: "code" })).json() as any).result.consumed).toBe(false);
+    expect(sql.grants.size).toBe(0);
   });
   it("lists runners in most-recently-connected order", async () => {
     const { registry } = makeRegistry();

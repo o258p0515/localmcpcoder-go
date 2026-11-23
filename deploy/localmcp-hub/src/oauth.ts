@@ -68,10 +68,19 @@ function clientValid(env: Env, id: string, secret: string): boolean {
   return !!env.MCP_OAUTH_CLIENT_ID && equal(id, env.MCP_OAUTH_CLIENT_ID) &&
     !!env.MCP_OAUTH_CLIENT_SECRET && equal(secret, env.MCP_OAUTH_CLIENT_SECRET);
 }
+async function registryGrant(env: Env, action: "storeOAuthGrant" | "consumeOAuthGrant", jti: string, grantType: "code" | "refresh", expiresAt?: number): Promise<boolean> {
+  const stub = env.REGISTRY_DO.get(env.REGISTRY_DO.idFromName("global"));
+  const response = await stub.fetch("https://registry/internal", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, jti, grant_type: grantType, ...(expiresAt === undefined ? {} : { expires_at: expiresAt }) }) });
+  const data = await response.json() as any;
+  if (!response.ok) throw new Error(data.error ?? "OAuth grant storage failed");
+  return action === "storeOAuthGrant" ? data.result?.stored === true : data.result?.consumed === true;
+}
 async function issueTokens(env: Env, clientId: string) {
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1000), refreshJti = randomId();
   const access_token = await sign(env, { typ: "access", sub: clientId, scope: "mcp:tools", exp: now + 86400, jti: randomId() });
-  const refresh_token = await sign(env, { typ: "refresh", sub: clientId, exp: now + 2592000, jti: randomId() });
+  await registryGrant(env, "storeOAuthGrant", refreshJti, "refresh", (now + 2592000) * 1000);
+  const refresh_token = await sign(env, { typ: "refresh", sub: clientId, exp: now + 2592000, jti: refreshJti });
   return { access_token, token_type: "Bearer", expires_in: 86400, refresh_token, scope: "mcp:tools" };
 }
 export async function verifyOAuthAccessToken(token: string, signingSecret: string): Promise<boolean> {
@@ -114,7 +123,9 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
     if (!env.MCP_OAUTH_CLIENT_ID || !equal(clientId, env.MCP_OAUTH_CLIENT_ID) || !allowedRedirect(env, redirect) ||
         !b.code_challenge || !b.state && b.state !== "") return new Response("Invalid OAuth authorization", { status: 400 });
     const now = Math.floor(Date.now() / 1000);
-    const code = await sign(env, { typ: "code", sub: clientId, exp: now + 300, redirect_uri: redirect, challenge: b.code_challenge, state: b.state, jti: randomId() });
+    const codeJti = randomId();
+    await registryGrant(env, "storeOAuthGrant", codeJti, "code", (now + 300) * 1000);
+    const code = await sign(env, { typ: "code", sub: clientId, exp: now + 300, redirect_uri: redirect, challenge: b.code_challenge, state: b.state, jti: codeJti });
     const target = new URL(redirect); target.searchParams.set("code", code); if (b.state) target.searchParams.set("state", b.state);
     return new Response(null, { status: 302, headers: { Location: target.toString(), "Cache-Control": "no-store", "Set-Cookie": "hub_oauth_csrf=; HttpOnly; Secure; SameSite=Lax; Path=/authorize; Max-Age=0" } });
   }
@@ -133,11 +144,13 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
           !allowedRedirect(env, b.redirect_uri ?? "") || !claims.challenge || await pkce(b.code_verifier ?? "") !== claims.challenge) {
         return json({ error: "invalid_grant" }, 400);
       }
+      if (!await registryGrant(env, "consumeOAuthGrant", claims.jti, "code")) return json({ error: "invalid_grant" }, 400);
       return json(await issueTokens(env, clientId));
     }
     if (b.grant_type === "refresh_token") {
       const claims = await verify(env, b.refresh_token ?? "");
-      if (!claims || claims.typ !== "refresh" || claims.sub !== clientId) return json({ error: "invalid_grant" }, 400);
+      if (!claims || claims.typ !== "refresh" || claims.sub !== clientId ||
+          !await registryGrant(env, "consumeOAuthGrant", claims.jti, "refresh")) return json({ error: "invalid_grant" }, 400);
       return json(await issueTokens(env, clientId));
     }
     return json({ error: "unsupported_grant_type" }, 400);

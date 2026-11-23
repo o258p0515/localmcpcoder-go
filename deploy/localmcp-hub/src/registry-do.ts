@@ -9,6 +9,7 @@ export class RegistryDO {
     this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS runners (runner_id TEXT PRIMARY KEY, os TEXT NOT NULL, arch TEXT NOT NULL, repo TEXT DEFAULT '', tags_json TEXT DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online', connected_at INTEGER NOT NULL)");
     this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS session_targets (session_key TEXT PRIMARY KEY, runner_id TEXT NOT NULL, updated_at INTEGER NOT NULL)");
     this.state.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runners_status ON runners(status)");
+    this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS oauth_grants (jti TEXT PRIMARY KEY, grant_type TEXT NOT NULL, expires_at INTEGER NOT NULL)");
   }
   async fetch(request: Request): Promise<Response> {
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
@@ -23,6 +24,8 @@ export class RegistryDO {
         case "getRunner": result = this.getRunner(String(body.runner_id ?? "")); break;
         case "getSessionRunner": result = this.getSessionRunner(String(body.session_key ?? "")); break;
         case "setSessionRunner": result = this.setSessionRunner(String(body.session_key ?? ""), String(body.runner_id ?? "")); break;
+        case "storeOAuthGrant": result = this.storeOAuthGrant(String(body.jti ?? ""), String(body.grant_type ?? ""), Number(body.expires_at)); break;
+        case "consumeOAuthGrant": result = this.consumeOAuthGrant(String(body.jti ?? ""), String(body.grant_type ?? "")); break;
         default: return Response.json({ error: "unknown registry action" }, { status: 400 });
       }
       return Response.json({ result });
@@ -64,6 +67,21 @@ export class RegistryDO {
     if (!runner || runner.status !== "online") throw new Error("runner is not online");
     this.state.storage.sql.exec("INSERT INTO session_targets(session_key,runner_id,updated_at) VALUES(?,?,?) ON CONFLICT(session_key) DO UPDATE SET runner_id=excluded.runner_id,updated_at=excluded.updated_at", key, id, Date.now());
     return { session_key: key, runner_id: id };
+  }
+  private storeOAuthGrant(jti: string, grantType: string, expiresAt: number): { stored: boolean } {
+    if (!jti || !["code", "refresh"].includes(grantType) || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+      throw new Error("invalid OAuth grant");
+    }
+    this.state.storage.sql.exec("DELETE FROM oauth_grants WHERE expires_at <= ?", Date.now());
+    this.state.storage.sql.exec("INSERT INTO oauth_grants(jti,grant_type,expires_at) VALUES(?,?,?)", jti, grantType, expiresAt);
+    return { stored: true };
+  }
+  private consumeOAuthGrant(jti: string, grantType: string): { consumed: boolean } {
+    if (!jti || !["code", "refresh"].includes(grantType)) return { consumed: false };
+    const row = this.state.storage.sql.exec<any>("SELECT jti FROM oauth_grants WHERE jti=? AND grant_type=? AND expires_at>?", jti, grantType, Date.now()).toArray()[0];
+    if (!row) return { consumed: false };
+    this.state.storage.sql.exec("DELETE FROM oauth_grants WHERE jti=? AND grant_type=?", jti, grantType);
+    return { consumed: true };
   }
   private rowToRunner(row: any): RunnerInfo {
     let tags: string[] = [];

@@ -1,4 +1,5 @@
 import { handleMcp } from "./mcp-router";
+import { handleOAuthRequest, verifyOAuthAccessToken } from "./oauth";
 import { RegistryDO } from "./registry-do";
 import { RunnerDO } from "./runner-do";
 import type { Env } from "./types";
@@ -50,8 +51,34 @@ export default {
       const rows = (data.result ?? []).map((r: any) => `<tr><td>${escapeHtml(r.runner_id)}</td><td>${escapeHtml(r.os)}/${escapeHtml(r.arch)}</td><td>${escapeHtml(r.status)}</td><td>${escapeHtml((r.tags ?? []).join(", "))}</td><td>${new Date(r.connected_at).toISOString()}</td></tr>`).join("");
       return withCors(new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>LocalMCP Hub</title><style>body{font:15px system-ui;margin:2rem;background:#f6f7f9;color:#17202a}table{border-collapse:collapse;background:white;width:100%}td,th{padding:.7rem;border:1px solid #ddd;text-align:left}h1{font-size:1.5rem}</style></head><body><h1>LocalMCP Hub runners</h1><table><thead><tr><th>Runner</th><th>Platform</th><th>Status</th><th>Tags</th><th>Connected</th></tr></thead><tbody>${rows || "<tr><td colspan=5>No runners connected</td></tr>"}</tbody></table></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8" } }));
     }
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      const issuer = url.origin;
+      return withCors(Response.json({
+        issuer,
+        authorization_endpoint: issuer + "/authorize",
+        token_endpoint: issuer + "/token",
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+        scopes_supported: ["mcp:tools"]
+      }));
+    }
+    if (url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/.well-known/oauth-protected-resource/mcp") {
+      return withCors(Response.json({
+        resource: url.origin + "/mcp",
+        authorization_servers: [url.origin],
+        bearer_methods_supported: ["header"],
+        scopes_supported: ["mcp:tools"]
+      }));
+    }
+    if (url.pathname === "/authorize" || url.pathname === "/token") {
+      return withCors(await handleOAuthRequest(request, env));
+    }
     if (url.pathname === "/mcp") {
-      if (!authorized(request, env.MCP_TOKEN)) return withCors(new Response("unauthorized", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="localmcp-hub"' } }));
+      const staticAuth = authorized(request, env.MCP_TOKEN);
+      const oauthAuth = await verifyOAuthAccessToken(bearer(request), env.HUB_SHARED_SECRET);
+      if (!staticAuth && !oauthAuth) return withCors(new Response("unauthorized", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="localmcp-hub", resource_metadata="' + url.origin + '/.well-known/oauth-protected-resource"' } }));
       if (!request.headers.get("Content-Type")?.includes("application/json")) return withCors(new Response("application/json required", { status: 415 }));
       const supplied = request.headers.get("Mcp-Session-Id") ?? request.headers.get("X-Session-Id");
       const session = supplied && /^[a-zA-Z0-9._:-]{1,128}$/.test(supplied) ? supplied : crypto.randomUUID();

@@ -48,7 +48,7 @@ function makeRunner() {
   const socket = {
     readyState: 1,
     send: vi.fn(),
-    deserializeAttachment: () => ({ runner_id: "runner-1" })
+    deserializeAttachment: () => ({ runner_id: "runner-1", connected_at: 1 })
   };
   const state = {
     storage: {

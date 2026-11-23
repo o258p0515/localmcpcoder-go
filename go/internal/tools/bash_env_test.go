@@ -3,6 +3,8 @@ package tools
 import (
  "strings"
  "testing"
+ "os"
+ "os/exec"
 )
 
 func TestScrubEnvRemovesTunnelAndProxyCredentials(t *testing.T) {
@@ -21,4 +23,26 @@ func TestScrubEnvRemovesTunnelAndProxyCredentials(t *testing.T) {
   }
  }
  if len(got)!=2 || got[0]!="PATH=/usr/bin" || got[1]!="LANG=C" { t.Fatalf("unexpected preserved environment: %#v",got) }
+}
+
+func TestChildProcessCannotReadHubCredentials(t *testing.T) {
+	if os.Getenv("LOCALMCP_SECRET_CHILD") == "1" {
+		for _, key := range []string{"HUB_SHARED_SECRET", "ADMIN_TOKEN"} {
+			if os.Getenv(key) != "" {
+				t.Errorf("child process unexpectedly inherited %s", key)
+			}
+		}
+		return
+	}
+	input := append(os.Environ(),
+		"HUB_SHARED_SECRET=hub-secret-sentinel",
+		"ADMIN_TOKEN=admin-secret-sentinel",
+		"LOCALMCP_SECRET_CHILD=1",
+	)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestChildProcessCannotReadHubCredentials$")
+	cmd.Env = scrubEnv(input)
+	cmd.Env = append(cmd.Env, "LOCALMCP_SECRET_CHILD=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("child process environment test failed: %v\n%s", err, output)
+	}
 }

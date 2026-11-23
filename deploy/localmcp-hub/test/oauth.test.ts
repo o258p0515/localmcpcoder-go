@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { handleOAuthRequest, verifyOAuthAccessToken } from "../src/oauth";
 import type { Env } from "../src/types";
+const grants = new Map<string, string>();
+const registryStub = { async fetch(_input: any, init: any) {
+  const body = JSON.parse(String(init.body));
+  if (body.action === "storeOAuthGrant") { grants.set(body.jti, body.grant_type); return Response.json({ result: { stored: true } }); }
+  if (body.action === "consumeOAuthGrant") {
+    const found = grants.get(body.jti) === body.grant_type;
+    if (found) grants.delete(body.jti);
+    return Response.json({ result: { consumed: found } });
+  }
+  return Response.json({ error: "unknown action" }, { status: 400 });
+} };
 const env = { MCP_TOKEN: "mcp-static-token", HUB_SHARED_SECRET: "hub-signing-secret",
   MCP_OAUTH_CLIENT_ID: "connector-client", MCP_OAUTH_CLIENT_SECRET: "connector-secret",
-  MCP_OAUTH_REDIRECT_URIS: '["https://connector.example/callback"]' } as Env;
+  MCP_OAUTH_REDIRECT_URIS: '["https://connector.example/callback"]',
+  REGISTRY_DO: { idFromName: () => "global", get: () => registryStub } } as unknown as Env;
 describe("Hub OAuth", () => {
   it("issues a PKCE-bound access token for an allowlisted redirect and validates it", async () => {
     const verifier = "a".repeat(64);
@@ -27,6 +39,13 @@ describe("Hub OAuth", () => {
     const tokens = await tokenResponse.json() as any;
     expect(await verifyOAuthAccessToken(tokens.access_token, env.HUB_SHARED_SECRET)).toBe(true);
     expect(await verifyOAuthAccessToken(tokens.access_token + "tampered", env.HUB_SHARED_SECRET)).toBe(false);
+    const replay = await handleOAuthRequest(new Request("https://hub.example/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tokenForm }), env);
+    expect(replay.status).toBe(400);
+    const refreshForm = new URLSearchParams({ grant_type: "refresh_token", client_id: "connector-client", client_secret: "connector-secret", refresh_token: tokens.refresh_token });
+    const refreshed = await handleOAuthRequest(new Request("https://hub.example/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: refreshForm }), env);
+    expect(refreshed.status).toBe(200);
+    const refreshReplay = await handleOAuthRequest(new Request("https://hub.example/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: refreshForm }), env);
+    expect(refreshReplay.status).toBe(400);
   });
   it("rejects redirect URIs outside the configured allowlist", async () => {
     const response = await handleOAuthRequest(new Request("https://hub.example/authorize?response_type=code&client_id=connector-client&redirect_uri=https%3A%2F%2Fevil.example%2Fcallback&code_challenge=x&code_challenge_method=S256"), env);

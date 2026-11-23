@@ -13,12 +13,14 @@ func TestStaticClientPKCEAndAuthentication(t *testing.T) {
 	s := NewWithOptions(Options{
 		Passphrase: "0123456789abcdef0123456789abcdef",
 		ClientID: clientID, ClientSecret: clientSecret,
-		RedirectURIs: []string{redirect}, AllowAnyRedirect: true,
+		AllowAnyRedirect: true,
 	})
 	if !s.AuthenticateClient(clientID, clientSecret) { t.Fatal("valid static client credentials rejected") }
 	if s.AuthenticateClient(clientID, "wrong-secret") { t.Fatal("invalid static client secret accepted") }
 	if _, err := s.ClientInfo(clientID, redirect); err != nil { t.Fatal(err) }
 	if _, err := s.ClientInfo(clientID, "https://attacker.example/callback?x=1"); err != nil { t.Fatalf("arbitrary HTTPS redirect should be accepted: %v", err) }
+	if _, err := s.ClientInfo(clientID, "custom-app://callback/path"); err != nil { t.Fatalf("arbitrary custom-scheme redirect should be accepted: %v", err) }
+	if _, err := s.ClientInfo(clientID, "javascript://callback"); err == nil { t.Fatal("javascript redirect must remain rejected") }
 
 	verifier := "0123456789012345678901234567890123456789012"
 	sum := sha256.Sum256([]byte(verifier))

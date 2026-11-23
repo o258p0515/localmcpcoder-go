@@ -24,7 +24,7 @@ func NewWithOptions(o Options)*Service {
  for _,v:=range o.RedirectURIs { if validRedirect(v) { s.staticRedirects[v]=true } }
  return s
 }
-func validRedirect(v string) bool { u,e:=url.Parse(v); if e!=nil||!u.IsAbs()||u.Host=="" { return false }; scheme:=strings.ToLower(u.Scheme); return scheme=="https"||scheme=="http"||scheme=="myapp"||scheme=="vscode"||scheme=="cursor"||scheme=="claude"||scheme=="chatgpt" }
+func validRedirect(v string) bool { u,e:=url.Parse(v); if e!=nil||!u.IsAbs()||u.Host=="" { return false }; scheme:=strings.ToLower(u.Scheme); return scheme!="javascript"&&scheme!="data"&&scheme!="vbscript"&&u.Fragment=="" }
 func(s *Service) AuthenticateClient(id,secret string) bool {
  if s.staticID=="" || id!=s.staticID || s.staticSecret=="" { return false }
  return len(secret)==len(s.staticSecret) && subtle.ConstantTimeCompare([]byte(secret),[]byte(s.staticSecret))==1

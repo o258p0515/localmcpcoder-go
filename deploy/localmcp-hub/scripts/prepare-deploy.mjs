@@ -43,7 +43,9 @@ if (!existingWorker) {
   const createdAt = Date.parse(existingWorker.created_on ?? "");
   const deployedAt = Date.parse(existingWorker.deployed_on ?? "");
   const references = existingWorker.references ?? {};
-  const hasReferences = Object.values(references).some((value) => Array.isArray(value) && value.length > 0);
+  const externalReferenceKeys = ["workers", "domains", "dispatch_namespace_outbounds", "queues"];
+  const hasExternalReferences = externalReferenceKeys.some((key) => Array.isArray(references[key]) && references[key].length > 0);
+  const durableObjectReferenceCount = Array.isArray(references.durable_objects) ? references.durable_objects.length : 0;
   // A failed first Wrangler upload created this exact isolated metadata record
   // but stopped before the custom route was attached. It is safe to adopt only
   // while it is recent, has no consumers, and has no public workers.dev subdomain.
@@ -51,14 +53,15 @@ if (!existingWorker) {
     age_ms: Number.isFinite(createdAt) ? Date.now() - createdAt : null,
     created_equals_deployed: createdAt === deployedAt,
     subdomain_enabled: existingWorker.subdomain?.enabled ?? null,
-    has_references: hasReferences,
+    has_external_references: hasExternalReferences,
+    durable_object_reference_count: durableObjectReferenceCount,
     reference_counts: Object.fromEntries(Object.entries(references).map(([key, value]) => [key, Array.isArray(value) ? value.length : null])),
     route_exists: !!existingRoute
   }));
   const partialHubUpload = Number.isFinite(createdAt) && Number.isFinite(deployedAt) &&
     Date.now() >= createdAt && Date.now() - createdAt <= 30 * 60 * 1000 &&
     deployedAt === createdAt && existingWorker.subdomain?.enabled === false &&
-    !hasReferences && !existingRoute;
+    !hasExternalReferences && durableObjectReferenceCount === 2 && !existingRoute;
   if (!partialHubUpload) {
     throw new Error("A Worker named localmcp-hub already exists but cannot be proven to be the isolated partial Hub resource created by the failed first upload; refusing to overwrite it.");
   }

@@ -108,8 +108,8 @@ jobs:
           echo "$TOOLS" | jq -e '.result.tools[] | select(.name=="bash") | ((.inputSchema // .input_schema).properties.runner_id.type=="string" and (.inputSchema // .input_schema).properties.async.type=="boolean")' >/dev/null
           echo "Remote tool schema contains runner_id and async."
 
-          CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$a}}}')
-          CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$b}}}')
+          CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"uname -n",runner_id:$a}}}')
+          CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"uname -n",runner_id:$b}}}')
           CALL_DEFAULT='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"bash","arguments":{"command":"hostname"}}}'
           RESPONSE_A=$(mcp_call "$CALL_A")
           RESPONSE_B=$(mcp_call "$CALL_B")

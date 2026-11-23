@@ -47,6 +47,14 @@ if (!existingWorker) {
   // A failed first Wrangler upload created this exact isolated metadata record
   // but stopped before the custom route was attached. It is safe to adopt only
   // while it is recent, has no consumers, and has no public workers.dev subdomain.
+  console.log("Worker adoption safety checks:", JSON.stringify({
+    age_ms: Number.isFinite(createdAt) ? Date.now() - createdAt : null,
+    created_equals_deployed: createdAt === deployedAt,
+    subdomain_enabled: existingWorker.subdomain?.enabled ?? null,
+    has_references: hasReferences,
+    reference_counts: Object.fromEntries(Object.entries(references).map(([key, value]) => [key, Array.isArray(value) ? value.length : null])),
+    route_exists: !!existingRoute
+  }));
   const partialHubUpload = Number.isFinite(createdAt) && Number.isFinite(deployedAt) &&
     Date.now() >= createdAt && Date.now() - createdAt <= 30 * 60 * 1000 &&
     deployedAt === createdAt && existingWorker.subdomain?.enabled === false &&

@@ -65,7 +65,7 @@ jobs:
         working-directory: go
         run: |
           set -euo pipefail
-          go mod download
+          go mod tidy
           go test ./...
           go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp
       - name: Start outbound Hub runner

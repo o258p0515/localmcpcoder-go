@@ -81,9 +81,9 @@ jobs:
             echo "::error::Provide both runner IDs or connect two online runners tagged e2e"
             exit 1
           fi
+          RUNNER_A_RUN_ID="${RUNNER_A_RUN_ID:-${RUNNER_A_ID##*-}}"
+          RUNNER_B_RUN_ID="${RUNNER_B_RUN_ID:-${RUNNER_B_ID##*-}}"
           if [ "$CANCEL_RUNNERS" = "true" ]; then
-            RUNNER_A_RUN_ID="${RUNNER_A_RUN_ID:-${RUNNER_A_ID##*-}}"
-            RUNNER_B_RUN_ID="${RUNNER_B_RUN_ID:-${RUNNER_B_ID##*-}}"
             for value in "$RUNNER_A_RUN_ID" "$RUNNER_B_RUN_ID"; do
               if ! [[ "$value" =~ ^[0-9]+$ ]]; then echo "::error::Runner workflow run IDs must be numeric when cancellation is enabled"; exit 1; fi
             done
@@ -129,9 +129,9 @@ jobs:
           echo "$TOOLS" | jq -e '.result.tools[] | select(.name=="bash") | ((.inputSchema // .input_schema).properties.runner_id.type=="string" and (.inputSchema // .input_schema).properties.async.type=="boolean")' >/dev/null
           echo "Remote tool schema contains runner_id and async."
 
-          CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"uname -n",runner_id:$a}}}')
-          CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"uname -n",runner_id:$b}}}')
-          CALL_DEFAULT='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"bash","arguments":{"command":"hostname"}}}'
+          CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"printf %s \\"$GITHUB_RUN_ID\\"",runner_id:$a}}}')
+          CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"printf %s \\"$GITHUB_RUN_ID\\"",runner_id:$b}}}')
+          CALL_DEFAULT='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"bash","arguments":{"command":"printf %s \\"$GITHUB_RUN_ID\\""}}}'
           RESPONSE_A=$(mcp_call "$CALL_A")
           RESPONSE_B=$(mcp_call "$CALL_B")
           RESPONSE_DEFAULT=$(mcp_call "$CALL_DEFAULT")
@@ -141,13 +141,14 @@ jobs:
           echo "$RESPONSE_A" | jq -e '.result.content[0].text | length > 0' >/dev/null
           echo "$RESPONSE_B" | jq -e '.result.content[0].text | length > 0' >/dev/null
           echo "$RESPONSE_DEFAULT" | jq -e '.result.content[0].text | length > 0' >/dev/null
-          HOST_A=$(echo "$RESPONSE_A" | jq -r '.result.content[0].text' | head -n1)
-          HOST_B=$(echo "$RESPONSE_B" | jq -r '.result.content[0].text' | head -n1)
-          HOST_DEFAULT=$(echo "$RESPONSE_DEFAULT" | jq -r '.result.content[0].text' | head -n1)
-          echo "Resolved host values: A=$HOST_A B=$HOST_B default=$HOST_DEFAULT"
-          test "$HOST_A" != "$HOST_B"
-          test "$HOST_DEFAULT" = "$HOST_A"
-          echo "Per-call runner_id routed to two distinct hosts and session default stayed on A."
+          RUN_ID_A=$(echo "$RESPONSE_A" | jq -r '.result.content[0].text' | head -n1)
+          RUN_ID_B=$(echo "$RESPONSE_B" | jq -r '.result.content[0].text' | head -n1)
+          RUN_ID_DEFAULT=$(echo "$RESPONSE_DEFAULT" | jq -r '.result.content[0].text' | head -n1)
+          echo "Resolved runner process IDs: A=$RUN_ID_A B=$RUN_ID_B default=$RUN_ID_DEFAULT"
+          test "$RUN_ID_A" = "$RUNNER_A_RUN_ID"
+          test "$RUN_ID_B" = "$RUNNER_B_RUN_ID"
+          test "$RUN_ID_DEFAULT" = "$RUNNER_A_RUN_ID"
+          echo "Per-call runner_id reached the correct independent GHA runner; session default stayed on A."
 
           ASYNC_CALL=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:"sleep 2; hostname",runner_id:$b,async:true}}}')
           ASYNC_RESPONSE=$(mcp_call "$ASYNC_CALL")

@@ -83,11 +83,11 @@ jobs:
           jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" '([.[].runner_id] | index($a) != null and index($b) != null)' /tmp/hub-runners.json >/dev/null
           echo "Admin registry sees both requested runner IDs."
 
-          SESSION_ID="hub-e2e-${GITHUB_RUN_ID}"
-          curl --fail --silent --show-error -o /tmp/hub-init.json \
+          curl --fail --silent --show-error -D /tmp/hub-init.headers -o /tmp/hub-init.json \
             -X POST "$BASE_URL/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
-            -H "Mcp-Session-Id: $SESSION_ID" \
             --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"hub-e2e","version":"1"}}}'
+          SESSION_ID=$(awk -F': ' 'tolower($1)=="mcp-session-id" {gsub("\\r","",$2); print $2}' /tmp/hub-init.headers | tail -n1)
+          test -n "$SESSION_ID"
           jq -e '.result.serverInfo.name == "localmcp-hub"' /tmp/hub-init.json >/dev/null
           echo "MCP initialize succeeded; session $SESSION_ID is active."
 
@@ -98,12 +98,15 @@ jobs:
           }
           RUNNERS=$(mcp_call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_runners","arguments":{}}}')
           echo "$RUNNERS" | jq -r '.result.content[0].text' | jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" '([.runners[].runner_id] | index($a) != null and index($b) != null)' >/dev/null
+          echo "MCP list_runners returned both requested IDs."
 
           SELECT=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$a}}}')
           mcp_call "$SELECT" | jq -e '.result.content[0].text | contains("runner_id")' >/dev/null
+          echo "Session selection succeeded."
 
           TOOLS=$(mcp_call '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
           echo "$TOOLS" | jq -e '.result.tools[] | select(.name=="bash") | ((.inputSchema // .input_schema).properties.runner_id.type=="string" and (.inputSchema // .input_schema).properties.async.type=="boolean")' >/dev/null
+          echo "Remote tool schema contains runner_id and async."
 
           CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$a}}}')
           CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$b}}}')

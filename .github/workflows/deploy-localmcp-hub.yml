@@ -90,6 +90,13 @@ jobs:
           printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --config wrangler.deploy.jsonc
           printf '%s' "$MCP_OAUTH_REDIRECT_URIS" | npx wrangler secret put MCP_OAUTH_REDIRECT_URIS --config wrangler.deploy.jsonc
           printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN --config wrangler.deploy.jsonc
+      - name: Export public Hub endpoint for Proxy integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'HUB_ENDPOINT_B64='
+          printf '%s' "$HUB_DOMAIN" | base64 -w0
+          printf '\\n'
       - name: Smoke test Hub endpoints
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}

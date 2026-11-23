@@ -61,7 +61,7 @@ function escapeHtml(value: string): string {
 async function form(request: Request): Promise<Record<string, string>> {
   if (request.headers.get("content-type")?.includes("application/json")) return await request.json() as Record<string, string>;
   const data = await request.formData(), result: Record<string, string> = {};
-  for (const [k, v] of data.entries()) if (typeof v === "string") result[k] = v;
+  data.forEach((value, name) => { if (typeof value === "string") result[name] = value; });
   return result;
 }
 function clientValid(env: Env, id: string, secret: string): boolean {

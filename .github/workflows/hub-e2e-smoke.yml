@@ -17,9 +17,14 @@ on:
         type: string
         required: true
       runner_b_run_id:
-        description: "GitHub Actions run ID that started runner B (cancelled after test)"
+        description: "GitHub Actions run ID that started runner B (used only when cancellation is enabled)"
         type: string
         required: true
+      cancel_runners:
+        description: "Cancel the supplied runner workflows after testing; leave false for persistent runners"
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
   actions: write
@@ -55,6 +60,7 @@ jobs:
           RUNNER_B_ID: ${{ inputs.runner_b_id }}
           RUNNER_B_RUN_ID: ${{ inputs.runner_b_run_id }}
           GH_TOKEN: ${{ github.token }}
+          CANCEL_RUNNERS: ${{ inputs.cancel_runners }}
         shell: bash
         run: |
           set -euo pipefail
@@ -66,7 +72,7 @@ jobs:
             gh run cancel "$RUNNER_A_RUN_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
             gh run cancel "$RUNNER_B_RUN_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
           }
-          trap cancel_runners EXIT
+          if [ "$CANCEL_RUNNERS" = "true" ]; then trap cancel_runners EXIT; fi
 
           curl --fail --silent --show-error "$BASE_URL/health" | jq -e '.status == "ok"'
           for attempt in $(seq 1 30); do
@@ -125,12 +131,16 @@ jobs:
           echo "$JOB_DATA" | jq -e '.status == "completed" and (.result.result.content[0].text | length > 0)' >/dev/null
           echo "Async job $JOB_ID completed and its result was retrieved."
 
-          cancel_runners
-          for attempt in $(seq 1 30); do
-            curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/hub-runners-after.json
-            if jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" 'all(.[]; .runner_id != $a and .runner_id != $b)' /tmp/hub-runners-after.json >/dev/null; then break; fi
-            sleep 2
-          done
-          jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" 'all(.[]; .runner_id != $a and .runner_id != $b)' /tmp/hub-runners-after.json >/dev/null
-          echo "Both runner workflows were cancelled and both runner registrations disappeared."
-          trap - EXIT
+          if [ "$CANCEL_RUNNERS" = "true" ]; then
+            cancel_runners
+            for attempt in $(seq 1 30); do
+              curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/hub-runners-after.json
+              if jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" 'all(.[]; .runner_id != $a and .runner_id != $b)' /tmp/hub-runners-after.json >/dev/null; then break; fi
+              sleep 2
+            done
+            jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" 'all(.[]; .runner_id != $a and .runner_id != $b)' /tmp/hub-runners-after.json >/dev/null
+            echo "Both runner workflows were cancelled and both runner registrations disappeared."
+            trap - EXIT
+          else
+            echo "E2E complete; leaving the two runner workflows online as requested."
+          fi

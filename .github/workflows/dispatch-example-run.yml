@@ -1,3 +1,4 @@
+# Manual proxy-triggered smoke run request.
 name: Dispatch example MCP runner
 on:
   push:

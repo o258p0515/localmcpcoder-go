@@ -110,14 +110,20 @@ jobs:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
-          INIT=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":22,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"public-endpoint-smoke","version":"1"}}}')
+          INIT_HEADERS=$(mktemp)
+          INIT=$(curl --fail --silent --show-error -D "$INIT_HEADERS" -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":22,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"public-endpoint-smoke","version":"1"}}}')
           echo "Public connector MCP initialize response: $INIT"
           echo "$INIT" | grep -q 'github-mcp-proxy'
-          TOOLS=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":23,"method":"tools/list","params":{}}')
+          SESSION_ID=$(awk 'tolower($1)=="mcp-session-id:" {print $2}' "$INIT_HEADERS" | tr -d '\r')
+          test -n "$SESSION_ID"
+          TOOLS=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H "Mcp-Session-Id: $SESSION_ID" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":23,"method":"tools/list","params":{}}')
           echo "Public connector tool catalog bytes: ${#TOOLS}"
           echo "$TOOLS" | grep -q 'list_github_accounts'
-          echo "$TOOLS" | grep -q '"account"'
-          ACCOUNT=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"get_me","arguments":{"account":"personal"}}}')
+          echo "$TOOLS" | grep -q 'select_github_account'
+          SELECT=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H "Mcp-Session-Id: $SESSION_ID" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"select_github_account","arguments":{"alias":"personal"}}}')
+          echo "Public connector account selection: $SELECT"
+          echo "$SELECT" | grep -q 'personal'
+          ACCOUNT=$(curl --fail --silent --show-error -X POST "https://$PUBLIC_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H "Mcp-Session-Id: $SESSION_ID" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"get_me","arguments":{}}}')
           echo "Public connector selected-account response: $ACCOUNT"
           echo "$ACCOUNT" | grep -q 'login'
       - name: Smoke test dynamic tool catalog
@@ -125,10 +131,15 @@ jobs:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
-          BODY=$(curl --fail --silent --show-error -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')
+          INIT_HEADERS=$(mktemp)
+          INIT=$(curl --fail --silent --show-error -D "$INIT_HEADERS" -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":30,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"catalog-smoke","version":"1"}}}')
+          echo "MCP initialize response: $INIT"
+          SESSION_ID=$(awk 'tolower($1)=="mcp-session-id:" {print $2}' "$INIT_HEADERS" | tr -d '\r')
+          test -n "$SESSION_ID"
+          BODY=$(curl --fail --silent --show-error -X POST "https://$WORKER_DOMAIN/mcp" -H "X-API-Key: $MCP_TOKEN" -H "Mcp-Session-Id: $SESSION_ID" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')
           echo "Tool catalog response bytes: ${#BODY}"
           echo "$BODY" | grep -q 'list_github_accounts'
-          echo "$BODY" | grep -q '"account"'
+          echo "$BODY" | grep -q 'select_github_account'
       - name: Smoke test invalid account guard
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}

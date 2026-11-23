@@ -3,7 +3,7 @@ import { getAccounts,listPublicAccounts,resolveAccount,clearAccountCaches } from
 import { callUpstream,clearUpstreamSessions } from "./upstream-client";
 import { getProxyCustomTools,injectAccountParameter } from "./schema-injector";
 import { auditLog } from "../utils/logger";
-const INSTRUCTIONS="You are connected to a multi-account GitHub MCP Proxy. Before any GitHub tool, call list_github_accounts (or read github://accounts), select the exact alias and pass it in account on every call. Invalid or missing aliases are rejected; no fallback is performed. After RTDB changes call refresh_accounts.";
+const INSTRUCTIONS="You are connected to a multi-account GitHub MCP Proxy. Call list_github_accounts, then select_github_account with the exact alias. The selection is remembered for this authenticated MCP session; separate sessions are isolated. You may still pass account explicitly for a one-off call. Invalid or missing aliases are rejected; no fallback is performed. After RTDB changes call refresh_accounts.";
 function result(id:any,value:any){return {jsonrpc:"2.0",id,result:value};}
 function error(id:any,code:number,message:string){return {jsonrpc:"2.0",id,error:{code,message}};}
 function textResult(value:any,isError=false){return {content:[{type:"text",text:typeof value==="string"?value:JSON.stringify(value,null,2)}],...(isError?{isError:true}:{})};}
@@ -37,16 +37,25 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
   if(msg.method==="resources/read"){if(p.uri!=="github://accounts")return error(msg.id,-32602,"Unknown resource");return result(msg.id,{contents:[{uri:p.uri,mimeType:"application/json",text:JSON.stringify(await listPublicAccounts(env))}]});}
   if(msg.method==="tools/list"){
    let tools:McpTool[]=[];const cached=await env.CACHE_KV.get("mcp:tools_catalog:v1");
-   if(cached){try{tools=JSON.parse(cached);}catch{}}
+   if(cached){try{tools=(JSON.parse(cached) as McpTool[]).map(injectAccountParameter);}catch{}}
    if(!tools.length){const accounts=await getAccounts(env);const source=Object.entries(accounts).find(([,a])=>a.enabled&&a.is_catalog_source)||Object.entries(accounts).find(([,a])=>a.enabled);if(!source)throw Error("No enabled GitHub account available");const upstream=await callUpstream(env,source[1],source[0],{jsonrpc:"2.0",id:"catalog",method:"tools/list",params:{}});tools=(upstream?.result?.tools||[]).map(injectAccountParameter);await env.CACHE_KV.put("mcp:tools_catalog:v1",JSON.stringify(tools),{expirationTtl:300});}
    return result(msg.id,{tools:[...getProxyCustomTools(),...tools]});
   }
   if(msg.method==="tools/call"){
    const name=String(p.name||""),args={...(p.arguments||{})};
    if(name==="list_github_accounts")return result(msg.id,textResult(await listPublicAccounts(env)));
+   if(name==="select_github_account"){
+    const selectedAlias=String(args.alias||"").trim();
+    if(!ctx.sessionId)return result(msg.id,textResult("select_github_account requires an initialized MCP session. Reconnect and initialize before selecting an account.",true));
+    const selected=await resolveAccount(env,selectedAlias);
+    if(!selected.ok){const available=selected.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("Invalid GitHub account alias "+JSON.stringify(selectedAlias)+". Available aliases:\n"+available,true));}
+    await env.OAUTH_KV.put("mcp:account-selection:"+encodeURIComponent(ctx.subject)+":"+encodeURIComponent(ctx.sessionId),selectedAlias,{expirationTtl:86400});
+    return result(msg.id,textResult({message:"GitHub account selected for this MCP session",alias:selectedAlias,username:selected.account.username,readonly:selected.account.readonly}));
+   }
    if(name==="refresh_accounts"){await clearAccountCaches(env);clearUpstreamSessions();const a=await listPublicAccounts(env);return result(msg.id,textResult({message:"Account and tool catalog caches refreshed",accounts:a}));}
-   const alias=String(args.account||ctx.pinnedAccount||"");const resolved=await resolveAccount(env,alias);
-   if(!resolved.ok){const available=resolved.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("Invalid or missing 'account' parameter (received: "+JSON.stringify(alias)+"). This proxy does NOT auto-fallback. Retry with a valid alias:\n"+available,true));}
+   const remembered=ctx.sessionId?await env.OAUTH_KV.get("mcp:account-selection:"+encodeURIComponent(ctx.subject)+":"+encodeURIComponent(ctx.sessionId)):null;
+   const alias=String(args.account||ctx.pinnedAccount||remembered||"");const resolved=await resolveAccount(env,alias);
+   if(!resolved.ok){const available=resolved.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("No valid GitHub account is selected for this MCP session (received: "+JSON.stringify(alias)+"). Call list_github_accounts, then select_github_account with an exact alias. You may also pass account for a one-off call. This proxy does NOT auto-fallback. Available aliases:\n"+available,true));}
    const account=resolved.account;
    const writeTool=/(?:^|_)(?:write|create|update|delete|push|merge|add|remove|fork|dismiss|submit|request|close|reopen|assign|cancel|rerun|enable|disable|set|put|patch)(?:_|$)/i;
    // This tool starts a repository security scan even though its name does not

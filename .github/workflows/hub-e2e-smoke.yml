@@ -108,16 +108,23 @@ jobs:
           echo "$TOOLS" | jq -e '.result.tools[] | select(.name=="bash") | ((.inputSchema // .input_schema).properties.runner_id.type=="string" and (.inputSchema // .input_schema).properties.async.type=="boolean")' >/dev/null
           echo "Remote tool schema contains runner_id and async."
 
-          CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$a}}}')
-          CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$b}}}')
-          CALL_DEFAULT='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"bash","arguments":{"command":"hostname"}}}'
-          HOST_A=$(mcp_call "$CALL_A" | jq -r '.result.content[0].text' | head -n1)
-          HOST_B=$(mcp_call "$CALL_B" | jq -r '.result.content[0].text' | head -n1)
-          HOST_DEFAULT=$(mcp_call "$CALL_DEFAULT" | jq -r '.result.content[0].text' | head -n1)
-          test -n "$HOST_A" && test -n "$HOST_B"
-          test "$HOST_A" != "$HOST_B"
-          test "$HOST_DEFAULT" = "$HOST_A"
-          echo "Per-call runner_id routed to two distinct hosts: A=$HOST_A B=$HOST_B default=$HOST_DEFAULT."
+          PROBE='hostname; printf "|%s|%s" "$LOCALMCP_RUNNER_NAME" "$GITHUB_RUN_ID"'
+          CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" --arg cmd "$PROBE" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:$cmd,runner_id:$a}}}')
+          CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" --arg cmd "$PROBE" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:$cmd,runner_id:$b}}}')
+          CALL_DEFAULT=$(jq -cn --arg cmd "$PROBE" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"bash",arguments:{command:$cmd}}}')
+          RESPONSE_A=$(mcp_call "$CALL_A")
+          RESPONSE_B=$(mcp_call "$CALL_B")
+          RESPONSE_DEFAULT=$(mcp_call "$CALL_DEFAULT")
+          echo "Runner A RPC response: $RESPONSE_A"
+          echo "Runner B RPC response: $RESPONSE_B"
+          echo "Session-default RPC response: $RESPONSE_DEFAULT"
+          RESULT_A=$(echo "$RESPONSE_A" | jq -r '.result.content[0].text // .error.message // empty')
+          RESULT_B=$(echo "$RESPONSE_B" | jq -r '.result.content[0].text // .error.message // empty')
+          RESULT_DEFAULT=$(echo "$RESPONSE_DEFAULT" | jq -r '.result.content[0].text // .error.message // empty')
+          test -n "$RESULT_A" && test -n "$RESULT_B"
+          test "$RESULT_A" != "$RESULT_B"
+          test "$RESULT_DEFAULT" = "$RESULT_A"
+          echo "Per-call runner_id and session selection routed correctly: A=$RESULT_A B=$RESULT_B default=$RESULT_DEFAULT."
 
           ASYNC_CALL=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:"sleep 2; hostname",runner_id:$b,async:true}}}')
           ASYNC_RESPONSE=$(mcp_call "$ASYNC_CALL")

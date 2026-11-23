@@ -80,6 +80,9 @@ jobs:
           CLOUDFLARE_EMAIL: ${{ secrets.CF_API_EMAIL }}
           CLOUDFLARE_API_KEY: ${{ secrets.CF_API_KEY }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
+          MCP_OAUTH_REDIRECT_URIS: ${{ secrets.MCP_OAUTH_REDIRECT_URIS }}
         run: |
           set -euo pipefail
           printf '%s' "$MCP_TOKEN" | npx wrangler secret put MCP_TOKEN --config wrangler.deploy.jsonc

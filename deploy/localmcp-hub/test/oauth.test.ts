@@ -9,7 +9,7 @@ describe("Hub OAuth", () => {
     const verifier = "a".repeat(64);
     const challengeBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
     let binary = ""; for (const byte of challengeBytes) binary += String.fromCharCode(byte);
-    const challenge = btoa(binary).replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+    const challenge = btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
     const authorize = await handleOAuthRequest(new Request("https://hub.example/authorize?response_type=code&client_id=connector-client&redirect_uri=https%3A%2F%2Fconnector.example%2Fcallback&code_challenge=" + challenge + "&code_challenge_method=S256&state=state-1"), env);
     expect(authorize.status).toBe(200);
     const cookie = authorize.headers.get("Set-Cookie")!.split(";")[0]!;

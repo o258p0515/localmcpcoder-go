@@ -89,7 +89,6 @@ jobs:
           printf '%s' "$MCP_OAUTH_CLIENT_ID" | npx wrangler secret put MCP_OAUTH_CLIENT_ID --config wrangler.deploy.jsonc
           printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --config wrangler.deploy.jsonc
           printf '%s' "$MCP_OAUTH_REDIRECT_URIS" | npx wrangler secret put MCP_OAUTH_REDIRECT_URIS --config wrangler.deploy.jsonc
-          printf '%s' "$HUB_SHARED_SECRET" | npx wrangler secret put HUB_SHARED_SECRET --config wrangler.deploy.jsonc
           printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN --config wrangler.deploy.jsonc
       - name: Smoke test Hub endpoints
         env:
@@ -126,9 +125,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/hub-runner-a" "$RUNNER_TEMP/hub-runner-b"
           (cd ../../go && go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp)
-          "$RUNNER_TEMP/localmcpcoder-mcp" --root "$RUNNER_TEMP/hub-runner-a" --port 18787 --tunnel hub --hub-urls "https://$HUB_DOMAIN" --hub-secret "$HUB_SHARED_SECRET" --runner-id "e2e-a-$GITHUB_RUN_ID" --runner-tags "linux,go,e2e" > "$RUNNER_TEMP/hub-runner-a.log" 2>&1 &
           PID_A=$!
-          "$RUNNER_TEMP/localmcpcoder-mcp" --root "$RUNNER_TEMP/hub-runner-b" --port 18788 --tunnel hub --hub-urls "https://$HUB_DOMAIN" --hub-secret "$HUB_SHARED_SECRET" --runner-id "e2e-b-$GITHUB_RUN_ID" --runner-tags "linux,go,e2e" > "$RUNNER_TEMP/hub-runner-b.log" 2>&1 &
           PID_B=$!
           cleanup() {
             kill -TERM "$PID_A" "$PID_B" 2>/dev/null || true

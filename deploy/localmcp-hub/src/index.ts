@@ -35,7 +35,7 @@ export default {
     if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
     if (url.pathname === "/health") return withCors(Response.json({ status: "ok", service: "localmcp-hub", time: new Date().toISOString() }));
     if (url.pathname === "/internal/runner-ws") {
-      if (!authorized(request, env.HUB_SHARED_SECRET)) return new Response("unauthorized", { status: 401 });
+      if (!authorized(request, env.MCP_TOKEN)) return new Response("unauthorized", { status: 401 });
       if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("websocket upgrade required", { status: 426 });
       const id = url.searchParams.get("id") ?? "";
       if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(id)) return new Response("invalid runner id", { status: 400 });
@@ -77,7 +77,7 @@ export default {
     }
     if (url.pathname === "/mcp") {
       const staticAuth = authorized(request, env.MCP_TOKEN);
-      const oauthAuth = await verifyOAuthAccessToken(bearer(request), env.HUB_SHARED_SECRET);
+      const oauthAuth = await verifyOAuthAccessToken(bearer(request), env.MCP_TOKEN);
       if (!staticAuth && !oauthAuth) return withCors(new Response("unauthorized", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="localmcp-hub", resource_metadata="' + url.origin + '/.well-known/oauth-protected-resource"' } }));
       if (!request.headers.get("Content-Type")?.includes("application/json")) return withCors(new Response("application/json required", { status: 415 }));
       const supplied = request.headers.get("Mcp-Session-Id") ?? request.headers.get("X-Session-Id");

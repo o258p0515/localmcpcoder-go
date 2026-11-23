@@ -19,14 +19,14 @@ import (
 	"github.com/coder/websocket"
 )
 
-type Config struct { HubURLs string; Secret string; Token string; RunnerID string; RunnerTags string; Port int; Repo string }
+type Config struct { HubURLs string; Token string; RunnerID string; RunnerTags string; Port int; Repo string }
 type Client struct { cfg Config; http *http.Client; mu sync.Mutex; connections map[*connection]struct{}; draining bool; active int; cond *sync.Cond }
 type connection struct { ws *websocket.Conn; writeMu sync.Mutex }
 type frame struct { Type string `json:"type"`; ReqID string `json:"req_id,omitempty"`; Payload json.RawMessage `json:"payload,omitempty"` }
 
 func New(cfg Config) (*Client,error) {
 	if strings.TrimSpace(cfg.HubURLs)=="" { return nil,fmt.Errorf("HUB_URLS/--hub-urls is required") }
-	if cfg.Secret=="" { return nil,fmt.Errorf("HUB_SHARED_SECRET/--hub-secret is required") }
+	
 	if cfg.Token=="" { return nil,fmt.Errorf("MCP_TOKEN is required for the local MCP handler") }
 	if cfg.Port==0 { cfg.Port=8787 }
 	if cfg.RunnerID=="" { cfg.RunnerID=defaultRunnerID() } else { cfg.RunnerID=sanitizeRunnerID(cfg.RunnerID) }
@@ -41,7 +41,7 @@ func(c *Client)runHub(ctx context.Context,raw string){
 	backoff:=time.Second
 	for ctx.Err()==nil{
 		target,err:=c.websocketURL(raw);if err!=nil{return}
-		headers:=http.Header{};headers.Set("Authorization","Bearer "+c.cfg.Secret)
+		headers:=http.Header{};headers.Set("Authorization","Bearer "+c.cfg.Token)
 		dialCtx,cancel:=context.WithTimeout(ctx,20*time.Second);ws,_,err:=websocket.Dial(dialCtx,target,&websocket.DialOptions{HTTPHeader:headers});cancel()
 		if err!=nil{fmt.Printf("Hub connection to %s failed: %v; retrying\n",raw,err);if !sleepContext(ctx,jitter(backoff)){return};backoff=nextBackoff(backoff);continue}
 		conn:=&connection{ws:ws};c.mu.Lock();if c.draining{c.mu.Unlock();_=ws.Close(websocket.StatusNormalClosure,"runner draining");return};c.connections[conn]=struct{}{};c.mu.Unlock()

@@ -27,7 +27,6 @@ type Config struct {
 	TSMode string
 	TSTag string
 	HubURLs string
-	HubSecret string
 	RunnerID string
 	RunnerTags string
 }
@@ -50,13 +49,12 @@ func Load() (Config,error) {
 	tsMode:=flag.String("ts-mode",env("TS_MODE","funnel"),"Tailscale funnel or serve")
 	tsTag:=flag.String("ts-tag",env("TS_TAG",env("TS_TAGS","tag:localmcpcoder")),"Tailscale device tag")
 	hubURLs:=flag.String("hub-urls",env("HUB_URLS",""),"comma-separated LocalMCP Hub base URLs")
-	hubSecret:=flag.String("hub-secret",env("HUB_SHARED_SECRET",""),"LocalMCP Hub runner authentication secret")
 	runnerID:=flag.String("runner-id",env("RUNNER_ID",""),"stable runner identifier")
 	runnerTags:=flag.String("runner-tags",env("RUNNER_TAGS",""),"comma-separated runner tags")
 	flag.Parse()
 
 	abs,err:=filepath.Abs(*root); if err!=nil { return c,err }
-	c=Config{Root:abs,Port:*port,Shell:*shell,MaxOutput:*max,AllowOutsideRoot:*outside,Tunnel:*tunnel,Host:*host,SkillsDir:*skills,TSHostname:*tsHost,TSMode:*tsMode,TSTag:*tsTag,HubURLs:*hubURLs,HubSecret:*hubSecret,RunnerID:*runnerID,RunnerTags:*runnerTags,Token:os.Getenv("MCP_TOKEN")}
+	c=Config{Root:abs,Port:*port,Shell:*shell,MaxOutput:*max,AllowOutsideRoot:*outside,Tunnel:*tunnel,Host:*host,SkillsDir:*skills,TSHostname:*tsHost,TSMode:*tsMode,TSTag:*tsTag,HubURLs:*hubURLs,RunnerID:*runnerID,RunnerTags:*runnerTags,Token:os.Getenv("MCP_TOKEN")}
 	if c.HubURLs!="" { c.Tunnel="hub" }
 	if c.Port<1||c.Port>65535 { return c,errors.New("port must be between 1 and 65535") }
 	if c.MaxOutput<1 { return c,errors.New("max-output must be positive") }
@@ -76,10 +74,10 @@ func Load() (Config,error) {
 	if c.Shell!="bash"&&c.Shell!="powershell"&&c.Shell!="cmd"{return c,fmt.Errorf("shell must be bash, powershell, or cmd")}
 	if c.TSMode!="funnel"&&c.TSMode!="serve"{return c,errors.New("ts-mode must be funnel or serve")}
 	if c.Tunnel!="auto"&&c.Tunnel!="none"&&c.Tunnel!="cloudflare"&&c.Tunnel!="tailscale"&&c.Tunnel!="hub"{return c,fmt.Errorf("unknown tunnel provider %q",c.Tunnel)}
-	if c.Tunnel=="hub" { if c.HubURLs=="" { return c,errors.New("--hub-urls/HUB_URLS is required when --tunnel hub") }; if c.HubSecret=="" { return c,errors.New("--hub-secret/HUB_SHARED_SECRET is required when --tunnel hub") } }
+	if c.Tunnel=="hub" && c.HubURLs=="" { return c,errors.New("--hub-urls/HUB_URLS is required when --tunnel hub") }
 	if os.Getenv("GITHUB_ACTIONS")=="true" {
 		fmt.Fprintln(os.Stdout,"::add-mask::"+c.Token)
-		for _,k:=range []string{"CF_API_TOKEN","CF_API_KEY","TS_AUTHKEY","TS_TRUST_CREDS","TUNNEL_TOKEN","HUB_SHARED_SECRET"} { if v:=os.Getenv(k);v!="" { fmt.Fprintln(os.Stdout,"::add-mask::"+v) } }
+		for _,k:=range []string{"CF_API_TOKEN","CF_API_KEY","TS_AUTHKEY","TS_TRUST_CREDS","TUNNEL_TOKEN"} { if v:=os.Getenv(k);v!="" { fmt.Fprintln(os.Stdout,"::add-mask::"+v) } }
 	}
 	return c,nil
 }

@@ -79,9 +79,6 @@ if (!existingWorker) {
 
 const token = required("MCP_TOKEN");
 if (token.length < 32) throw new Error("MCP_TOKEN must be at least 32 characters");
-const shared = createHmac("sha256", token)
-  .update("localmcp-hub-internal-v1:" + hubDomain)
-  .digest("hex");
 const admin = createHmac("sha256", token)
   .update("localmcp-hub-admin-v1:" + hubDomain)
   .digest("hex");
@@ -95,7 +92,6 @@ if (deployConfig.includes("__ACCOUNT_ID__") || deployConfig.includes("__HUB_DOMA
 }
 writeFileSync(new URL("../wrangler.deploy.jsonc", import.meta.url), deployConfig, { mode: 0o600 });
 exportValue("HUB_DOMAIN", hubDomain, false);
-exportValue("HUB_SHARED_SECRET", shared);
 exportValue("ADMIN_TOKEN", admin);
 if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "zone_name=" + zone.zoneName + "\n");
 console.log(`Prepared isolated Hub hostname https://${hubDomain}; existing CF_DOMAIN and unrelated Worker routes were not changed.`);

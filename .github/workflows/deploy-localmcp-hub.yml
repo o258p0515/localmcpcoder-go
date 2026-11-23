@@ -106,6 +106,10 @@ jobs:
           test "$UNAUTH" = "401"
           INIT=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"hub-smoke","version":"1"}}}')
           echo "$INIT" | grep -q 'localmcp-hub'
+          OAUTH_META=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/.well-known/oauth-authorization-server")
+          echo "$OAUTH_META" | jq -e --arg endpoint "https://$HUB_DOMAIN/authorize" --arg token "https://$HUB_DOMAIN/token" '.authorization_endpoint == $endpoint and .token_endpoint == $token' >/dev/null
+          RESOURCE_META=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/.well-known/oauth-protected-resource")
+          echo "$RESOURCE_META" | jq -e --arg resource "https://$HUB_DOMAIN/mcp" --arg issuer "https://$HUB_DOMAIN" '.resource == $resource and (.authorization_servers | index($issuer) != null)' >/dev/null
           TOOLS=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')
           echo "$TOOLS" | grep -q 'list_runners'
           ADMIN=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN")

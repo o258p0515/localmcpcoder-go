@@ -39,9 +39,12 @@ jobs:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
+          MCP_OAUTH_REDIRECT_URIS: ${{ secrets.MCP_OAUTH_REDIRECT_URIS }}
         run: |
           set -euo pipefail
-          for name in CF_API_EMAIL CF_API_KEY CF_DOMAIN MCP_TOKEN; do
+          for name in CF_API_EMAIL CF_API_KEY CF_DOMAIN MCP_TOKEN MCP_OAUTH_CLIENT_ID MCP_OAUTH_CLIENT_SECRET MCP_OAUTH_REDIRECT_URIS; do
             if [ -z "${!name:-}" ]; then echo "::error title=Missing secret::$name is required"; exit 1; fi
           done
       - name: Install Worker dependencies
@@ -80,6 +83,9 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$MCP_TOKEN" | npx wrangler secret put MCP_TOKEN --config wrangler.deploy.jsonc
+          printf '%s' "$MCP_OAUTH_CLIENT_ID" | npx wrangler secret put MCP_OAUTH_CLIENT_ID --config wrangler.deploy.jsonc
+          printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --config wrangler.deploy.jsonc
+          printf '%s' "$MCP_OAUTH_REDIRECT_URIS" | npx wrangler secret put MCP_OAUTH_REDIRECT_URIS --config wrangler.deploy.jsonc
           printf '%s' "$HUB_SHARED_SECRET" | npx wrangler secret put HUB_SHARED_SECRET --config wrangler.deploy.jsonc
           printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN --config wrangler.deploy.jsonc
       - name: Smoke test Hub endpoints

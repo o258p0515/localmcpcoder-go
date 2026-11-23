@@ -20,7 +20,7 @@ function partialWorker(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Cloudflare Worker adoption guard", () => {
-  it("allows only the isolated partial upload with its two expected Durable Object references", () => {
+  it("allows the isolated partial upload with its two Durable Object references", () => {
     expect(isIsolatedPartialHubWorker(partialWorker(), undefined, now)).toBe(true);
   });
 
@@ -34,13 +34,13 @@ describe("Cloudflare Worker adoption guard", () => {
     expect(isIsolatedPartialHubWorker(worker, undefined, now)).toBe(false);
   });
 
-  it("rejects a Worker with missing or unexpected Durable Object references", () => {
+  it("rejects missing or extra Durable Object references", () => {
     expect(isIsolatedPartialHubWorker(partialWorker({
       references: { durable_objects: [{ name: "RegistryDO" }] }
     }), undefined, now)).toBe(false);
     expect(isIsolatedPartialHubWorker(partialWorker({
-      references: { durable_objects: [{ name: "OtherDO" }, { name: "AnotherDO" }] }
-    }), undefined, now)).toBe(true);
+      references: { durable_objects: [{ name: "RegistryDO" }, { name: "RunnerDO" }, { name: "OtherDO" }] }
+    }), undefined, now)).toBe(false);
   });
 
   it("rejects active routes, public subdomains, stale metadata, or mismatched timestamps", () => {

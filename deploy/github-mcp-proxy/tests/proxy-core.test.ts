@@ -4,7 +4,8 @@ import {clearAccountCaches} from "../src/rtdb/account-store";
 import {clearUpstreamSessions} from "../src/mcp/upstream-client";
 afterEach(async()=>{vi.unstubAllGlobals();clearUpstreamSessions();await clearAccountCaches(makeEnv());});
 function kv(){const m=new Map<string,string>();return {m,get:async(k:string)=>m.get(k)??null,put:async(k:string,v:string)=>m.set(k,v),delete:async(k:string)=>m.delete(k)} as any;}
-function makeEnv(){return {MCP_TOKEN:"test-secret",RTDB_AUTH_URL:"https://unit.firebaseio.com/accounts.json?auth=x",CACHE_KV:kv(),OAUTH_KV:kv()} as any;}
+function durableObjects(){const values=new Map<string,{alias:string;expiresAt:number}>();return {idFromName:(name:string)=>name,get:(id:string)=>({fetch:async(_input:any,init:any={})=>{if(init.method==="PUT"){const body=JSON.parse(init.body);values.set(id,{alias:body.alias,expiresAt:Date.now()+86400000});return Response.json({ok:true});}const saved=values.get(id);return Response.json({alias:saved&&saved.expiresAt>Date.now()?saved.alias:null});}})} as any;}
+function makeEnv(sessions:any=durableObjects()){return {MCP_TOKEN:"test-secret",RTDB_AUTH_URL:"https://unit.firebaseio.com/accounts.json?auth=x",CACHE_KV:kv(),OAUTH_KV:kv(),SSE_SESSIONS:sessions} as any;}
 const accountData={
  personal:{username:"me",token:"ghp_personal_pat",enabled:true},
  work:{username:"work-user",token:"ghp_work_pat",enabled:true,readonly:false}
@@ -40,7 +41,7 @@ describe("proxy core",()=>{
   expect(forwarded.params.arguments).toEqual({extra:"value"});expect(toolCall.init.headers.get("Authorization")).toBe("Bearer ghp_selected_pat");
  });
  it("remembers the selected account per authenticated MCP session without cross-session leakage",async()=>{
-  const e=makeEnv();await clearAccountCaches(e);const upstreamCalls:any[]=[];
+  const sessions=durableObjects();const e=makeEnv(sessions),e2=makeEnv(sessions);await clearAccountCaches(e);const upstreamCalls:any[]=[];
   vi.stubGlobal("fetch",vi.fn(async(input:any,init:any)=>{
    const url=String(input);
    if(url.includes("accounts.json"))return Response.json(accountData);
@@ -56,17 +57,17 @@ describe("proxy core",()=>{
   const chooseA=await handleJsonRpcMessage({jsonrpc:"2.0",id:10,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"personal"}}} as any,e,sessionA);
   const chooseB=await handleJsonRpcMessage({jsonrpc:"2.0",id:11,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"work"}}} as any,e,sessionB);
   expect(chooseA.result.isError).toBeFalsy();expect(chooseB.result.isError).toBeFalsy();
-  await handleJsonRpcMessage({jsonrpc:"2.0",id:12,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e,sessionA);
-  await handleJsonRpcMessage({jsonrpc:"2.0",id:13,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e,sessionB);
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:12,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,sessionA);
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:13,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,sessionB);
   const auths=upstreamCalls.filter(x=>x.method==="tools/call").map(x=>x.authorization);
   expect(auths).toEqual(["Bearer ghp_personal_pat","Bearer ghp_work_pat"]);
-  const noSession=await handleJsonRpcMessage({jsonrpc:"2.0",id:14,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e,{method:"static_token",subject:"same-client",sessionId:"session-c"});
+  const noSession=await handleJsonRpcMessage({jsonrpc:"2.0",id:14,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,{method:"static_token",subject:"same-client",sessionId:"session-c"});
   expect(noSession.result.isError).toBe(true);
-  const invalid=await handleJsonRpcMessage({jsonrpc:"2.0",id:15,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"missing"}}} as any,e,{...sessionA,sessionId:"session-invalid"});
+  const invalid=await handleJsonRpcMessage({jsonrpc:"2.0",id:15,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"missing"}}} as any,e2,{...sessionA,sessionId:"session-invalid"});
   expect(invalid.result.isError).toBe(true);
  });
  it("scopes selection to authenticated client identity when transport omits a session id",async()=>{
-  const e=makeEnv();await clearAccountCaches(e);const upstreamCalls:any[]=[];
+  const sessions=durableObjects();const e=makeEnv(sessions),e2=makeEnv(sessions);await clearAccountCaches(e);const upstreamCalls:any[]=[];
   vi.stubGlobal("fetch",vi.fn(async(input:any,init:any)=>{
    const url=String(input);
    if(url.includes("accounts.json"))return Response.json(accountData);
@@ -82,8 +83,8 @@ describe("proxy core",()=>{
   const chooseA=await handleJsonRpcMessage({jsonrpc:"2.0",id:16,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"personal"}}} as any,e,clientA);
   const chooseB=await handleJsonRpcMessage({jsonrpc:"2.0",id:17,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"work"}}} as any,e,clientB);
   expect(chooseA.result.isError).toBeFalsy();expect(chooseB.result.isError).toBeFalsy();
-  await handleJsonRpcMessage({jsonrpc:"2.0",id:18,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e,clientA);
-  await handleJsonRpcMessage({jsonrpc:"2.0",id:19,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e,clientB);
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:18,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,clientA);
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:19,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,clientB);
   const auths=upstreamCalls.filter(x=>x.method==="tools/call").map(x=>x.authorization);
   expect(auths).toEqual(["Bearer ghp_personal_pat","Bearer ghp_work_pat"]);
  });

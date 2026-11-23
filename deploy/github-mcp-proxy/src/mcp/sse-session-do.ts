@@ -1,12 +1,33 @@
 import type { Env,AuthContext,JsonRpc } from "../types";
 import { handleJsonRpcMessage } from "./proxy-core";
 export class SseSessionDO {
+ private state:DurableObjectState;
  private writer:WritableStreamDefaultWriter<Uint8Array>|null=null;
  private env:Env;
  private auth:AuthContext|null=null;
- constructor(_state:DurableObjectState,env:Env){this.env=env;}
+ constructor(state:DurableObjectState,env:Env){this.state=state;this.env=env;}
+ private async handleAccountSelection(req:Request):Promise<Response>{
+  if(req.method==="GET"){
+   const saved=await this.state.storage.get<{alias:string;expiresAt:number}>("account-selection");
+   if(!saved||saved.expiresAt<=Date.now()){
+    if(saved)await this.state.storage.delete("account-selection");
+    return Response.json({alias:null});
+   }
+   return Response.json({alias:saved.alias});
+  }
+  if(req.method==="PUT"){
+   let body:any;try{body=await req.json();}catch{return Response.json({error:"Invalid JSON body"},{status:400});}
+   const alias=typeof body?.alias==="string"?body.alias.trim():"";
+   if(!alias)return Response.json({error:"alias is required"},{status:400});
+   await this.state.storage.put("account-selection",{alias,expiresAt:Date.now()+86400000});
+   return Response.json({ok:true});
+  }
+  if(req.method==="DELETE"){await this.state.storage.delete("account-selection");return Response.json({ok:true});}
+  return new Response("Method Not Allowed",{status:405,headers:{Allow:"GET, PUT, DELETE"}});
+ }
  async fetch(req:Request):Promise<Response>{
   const u=new URL(req.url);
+  if(u.pathname==="/_internal/account-selection")return this.handleAccountSelection(req);
   const method=req.headers.get("X-Proxy-Auth-Method");if(method==="oauth"||method==="static_token")this.auth={method,subject:req.headers.get("X-Proxy-Subject")||"proxy",pinnedAccount:req.headers.get("X-GitHub-Account")||undefined,sessionId:u.searchParams.get("sessionId")||undefined};
   if(req.method==="GET"&&u.pathname.endsWith("/sse")){
    if(this.writer)try{await this.writer.close();}catch{}

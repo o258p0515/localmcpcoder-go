@@ -8,6 +8,18 @@ function result(id:any,value:any){return {jsonrpc:"2.0",id,result:value};}
 function error(id:any,code:number,message:string){return {jsonrpc:"2.0",id,error:{code,message}};}
 function textResult(value:any,isError=false){return {content:[{type:"text",text:typeof value==="string"?value:JSON.stringify(value,null,2)}],...(isError?{isError:true}:{})};}
 function accountSelectionKey(ctx:AuthContext){const scope=ctx.sessionId?"session:"+encodeURIComponent(ctx.sessionId):"client";return "mcp:account-selection:"+ctx.method+":"+encodeURIComponent(ctx.subject)+":"+scope;}
+async function saveAccountSelection(env:Env,ctx:AuthContext,alias:string){
+ const stub=env.SSE_SESSIONS.get(env.SSE_SESSIONS.idFromName(accountSelectionKey(ctx)));
+ const response=await stub.fetch("https://session.internal/_internal/account-selection",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({alias})});
+ if(!response.ok)throw Error("Failed to persist GitHub account selection (HTTP "+response.status+")");
+}
+async function loadAccountSelection(env:Env,ctx:AuthContext):Promise<string|null>{
+ const stub=env.SSE_SESSIONS.get(env.SSE_SESSIONS.idFromName(accountSelectionKey(ctx)));
+ const response=await stub.fetch("https://session.internal/_internal/account-selection");
+ if(!response.ok)throw Error("Failed to read GitHub account selection (HTTP "+response.status+")");
+ const value=await response.json() as {alias?:unknown};
+ return typeof value.alias==="string"?value.alias:null;
+}
 async function createRepositoryWithRest(account:import("../types").RtdbAccount,args:Record<string,any>){
  const name=String(args.name||"").trim();
  if(!name)return textResult("create_repository requires a non-empty name.",true);
@@ -49,11 +61,11 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
     const selectedAlias=String(args.alias||"").trim();
     const selected=await resolveAccount(env,selectedAlias);
     if(!selected.ok){const available=selected.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("Invalid GitHub account alias "+JSON.stringify(selectedAlias)+". Available aliases:\n"+available,true));}
-    await env.OAUTH_KV.put(accountSelectionKey(ctx),selectedAlias,{expirationTtl:86400});
+    await saveAccountSelection(env,ctx,selectedAlias);
     return result(msg.id,textResult({message:"GitHub account selected",scope:ctx.sessionId?"mcp_session":"authenticated_client",alias:selectedAlias,username:selected.account.username,readonly:selected.account.readonly}));
    }
    if(name==="refresh_accounts"){await clearAccountCaches(env);clearUpstreamSessions();const a=await listPublicAccounts(env);return result(msg.id,textResult({message:"Account and tool catalog caches refreshed",accounts:a}));}
-   const remembered=await env.OAUTH_KV.get(accountSelectionKey(ctx));
+   const remembered=await loadAccountSelection(env,ctx);
    const alias=String(args.account||ctx.pinnedAccount||remembered||"");const resolved=await resolveAccount(env,alias);
    if(!resolved.ok){const available=resolved.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("No valid GitHub account is selected for this MCP session (received: "+JSON.stringify(alias)+"). Call list_github_accounts, then select_github_account with an exact alias. You may also pass account for a one-off call. This proxy does NOT auto-fallback. Available aliases:\n"+available,true));}
    const account=resolved.account;

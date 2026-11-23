@@ -23,23 +23,25 @@ const existingRoute = routes.find((route) => route.pattern === hubDomain + "/*")
 if (existingRoute && existingRoute.script !== "localmcp-hub") {
   throw new Error(`Worker route ${hubDomain}/* is already assigned to another Worker (${existingRoute.script ?? "unknown"}). Refusing to overwrite it.`);
 }
-
-// Cloudflare's current Workers API separates Worker metadata from script versions.
-// Pre-create only this dedicated Worker so Wrangler's subsequent version upload/deploy
-// does not try to read a Worker record that has not been registered yet.
 const workerRecords = await cf("GET", `/accounts/${zone.accountId}/workers/workers?per_page=100`);
 const existingWorker = workerRecords.find((worker) => worker.name === "localmcp-hub");
+if (existingWorker) {
+  console.log("Existing Cloudflare Worker metadata:", JSON.stringify({
+    id: existingWorker.id, name: existingWorker.name, created_on: existingWorker.created_on,
+    updated_on: existingWorker.updated_on, deployed_on: existingWorker.deployed_on ?? null,
+    tags: existingWorker.tags ?? [], subdomain: existingWorker.subdomain ?? null,
+    routeAssignedToHub: existingRoute?.script === "localmcp-hub"
+  }));
+}
 if (!existingWorker) {
   await cf("POST", `/accounts/${zone.accountId}/workers/workers`, {
-    name: "localmcp-hub", logpush: false, tags: ["localmcp-hub-managed"],
-    subdomain: { enabled: false }
+    name: "localmcp-hub", logpush: false, tags: ["localmcp-hub-managed"], subdomain: { enabled: false }
   });
   console.log("Created dedicated Cloudflare Worker metadata record localmcp-hub.");
 } else if (!(existingWorker.tags ?? []).includes("localmcp-hub-managed") &&
            (!existingRoute || existingRoute.script !== "localmcp-hub")) {
-  throw new Error("A Worker named localmcp-hub already exists but is not tagged as managed by this deployment; refusing to overwrite it.");
+  throw new Error("A Worker named localmcp-hub already exists but is not tagged as managed by this deployment; refusing to overwrite it. Inspect its created_on/deployed_on metadata before adopting it.");
 }
-
 const token = required("MCP_TOKEN");
 if (token.length < 32) throw new Error("MCP_TOKEN must be at least 32 characters");
 const shared = createHmac("sha256", token).update("localmcp-hub-internal-v1:" + hubDomain).digest("hex");

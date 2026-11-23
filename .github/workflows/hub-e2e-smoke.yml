@@ -88,14 +88,14 @@ jobs:
               -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
               -H "Mcp-Session-Id: $SESSION_ID" --data "$1"
           }
-          TOOLS=$(mcp_call '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
-          echo "$TOOLS" | jq -e '.result.tools[] | select(.name=="bash") | ((.inputSchema // .input_schema).properties.runner_id.type=="string" and (.inputSchema // .input_schema).properties.async.type=="boolean")' >/dev/null
-
           RUNNERS=$(mcp_call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_runners","arguments":{}}}')
           echo "$RUNNERS" | jq -r '.result.content[0].text' | jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" '([.runners[].runner_id] | index($a) != null and index($b) != null)' >/dev/null
 
           SELECT=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$a}}}')
           mcp_call "$SELECT" | jq -e '.result.content[0].text | contains("runner_id")' >/dev/null
+
+          TOOLS=$(mcp_call '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+          echo "$TOOLS" | jq -e '.result.tools[] | select(.name=="bash") | ((.inputSchema // .input_schema).properties.runner_id.type=="string" and (.inputSchema // .input_schema).properties.async.type=="boolean")' >/dev/null
 
           CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$a}}}')
           CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$b}}}')

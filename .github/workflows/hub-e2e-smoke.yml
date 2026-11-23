@@ -150,7 +150,7 @@ jobs:
           test "$RESULT_DEFAULT" = "$EXPECTED_A"
           echo "Per-call runner_id routed to distinct machines and session selection defaulted to A."
 
-          ASYNC_CALL=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:"sleep 2; hostname",runner_id:$b,async:true}}}')
+          ASYNC_CALL=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:"sleep 2; printf async-complete",runner_id:$b,async:true}}}')
           ASYNC_RESPONSE=$(mcp_call "$ASYNC_CALL")
           JOB_ID=$(echo "$ASYNC_RESPONSE" | jq -r '.result.content[0].text | fromjson | .job_id')
           test -n "$JOB_ID" && test "$JOB_ID" != "null"
@@ -164,7 +164,7 @@ jobs:
             if [ "$STATUS" = "failed" ]; then echo "$JOB_DATA"; exit 1; fi
             sleep 1
           done
-          echo "$JOB_DATA" | jq -e '.status == "completed" and (.result.result.content[0].text | length > 0)' >/dev/null
+          echo "$JOB_DATA" | jq -e '.status == "completed" and (.result.result.content[0].text | contains("async-complete"))' >/dev/null
           echo "Async job $JOB_ID completed and its result was retrieved."
 
           if [ "$CANCEL_RUNNERS" = "true" ]; then

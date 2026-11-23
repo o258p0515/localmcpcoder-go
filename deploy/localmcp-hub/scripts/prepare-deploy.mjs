@@ -40,21 +40,23 @@ if (!existingWorker) {
   console.log("Created dedicated Cloudflare Worker metadata record localmcp-hub.");
 } else if (!(existingWorker.tags ?? []).includes("localmcp-hub-managed") &&
            (!existingRoute || existingRoute.script !== "localmcp-hub")) {
-  const dns = records[0];
-  const dnsCreated = Date.parse(dns?.created_on ?? "");
-  const workerCreated = Date.parse(existingWorker.created_on ?? "");
+  const createdAt = Date.parse(existingWorker.created_on ?? "");
+  const deployedAt = Date.parse(existingWorker.deployed_on ?? "");
   const references = existingWorker.references ?? {};
   const hasReferences = Object.values(references).some((value) => Array.isArray(value) && value.length > 0);
-  const partialHubUpload = dns?.comment === "LocalMCP Hub Worker route" &&
-    Number.isFinite(dnsCreated) && Number.isFinite(workerCreated) &&
-    workerCreated >= dnsCreated && workerCreated - dnsCreated <= 10 * 60 * 1000 &&
-    existingWorker.subdomain?.enabled === false && !hasReferences;
+  // A failed first Wrangler upload created this exact isolated metadata record
+  // but stopped before the custom route was attached. It is safe to adopt only
+  // while it is recent, has no consumers, and has no public workers.dev subdomain.
+  const partialHubUpload = Number.isFinite(createdAt) && Number.isFinite(deployedAt) &&
+    Date.now() >= createdAt && Date.now() - createdAt <= 30 * 60 * 1000 &&
+    deployedAt === createdAt && existingWorker.subdomain?.enabled === false &&
+    !hasReferences && !existingRoute;
   if (!partialHubUpload) {
-    throw new Error("A Worker named localmcp-hub already exists but cannot be proven to be the partial Hub resource created by this deployment; refusing to overwrite it.");
+    throw new Error("A Worker named localmcp-hub already exists but cannot be proven to be the isolated partial Hub resource created by the failed first upload; refusing to overwrite it.");
   }
   const tags = [...new Set([...(existingWorker.tags ?? []), "localmcp-hub-managed"])];
   existingWorker = await cf("PATCH", `/accounts/${zone.accountId}/workers/workers/${encodeURIComponent(existingWorker.id)}`, { tags });
-  console.log("Adopted the isolated Worker metadata created by the earlier Hub upload; only its management tag was changed.");
+  console.log("Adopted the isolated Worker metadata from the failed first Hub upload; only its management tag was changed.");
 }
 const token = required("MCP_TOKEN");
 if (token.length < 32) throw new Error("MCP_TOKEN must be at least 32 characters");

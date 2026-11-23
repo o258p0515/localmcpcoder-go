@@ -4,8 +4,8 @@ import { cf, required, resolveZone, verifyIdentity } from "./cloudflare.mjs";
 import { isIsolatedPartialHubWorker } from "./worker-safety.mjs";
 
 function mask(value) { process.stdout.write("::add-mask::" + value + "\n"); }
-function exportValue(name, value) {
-  mask(value);
+function exportValue(name, value, secret = true) {
+  if (secret) mask(value);
   if (process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, name + "=" + value + "\n");
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, name.toLowerCase() + "=" + value + "\n");
 }
@@ -94,7 +94,7 @@ if (deployConfig.includes("__ACCOUNT_ID__") || deployConfig.includes("__HUB_DOMA
   throw new Error("Failed to render Wrangler deployment configuration");
 }
 writeFileSync(new URL("../wrangler.deploy.jsonc", import.meta.url), deployConfig, { mode: 0o600 });
-exportValue("HUB_DOMAIN", hubDomain);
+exportValue("HUB_DOMAIN", hubDomain, false);
 exportValue("HUB_SHARED_SECRET", shared);
 exportValue("ADMIN_TOKEN", admin);
 if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "zone_name=" + zone.zoneName + "\n");

@@ -104,8 +104,6 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
-          HUB_DOMAIN: ${{ env.HUB_DOMAIN }}
-          HUB_SHARED_SECRET: ${{ env.HUB_SHARED_SECRET }}
           RUNNER_TEMP: ${{ runner.temp }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -123,4 +121,12 @@ jobs:
             wait "$PID_B" 2>/dev/null || true
           }
           trap cleanup EXIT
-          RUNNER_A="e2e-a-$GITHUB_RUN_ID" RUNNER_B="e2e-b-$GITHUB_RUN_ID" RUNNER_A_PID="$PID_A" RUNNER_B_PID="$PID_B" node scripts/e2e-smoke.mjs
+          if ! RUNNER_A="e2e-a-$GITHUB_RUN_ID" RUNNER_B="e2e-b-$GITHUB_RUN_ID" RUNNER_A_PID="$PID_A" RUNNER_B_PID="$PID_B" node scripts/e2e-smoke.mjs; then
+            echo "::group::Runner A log"
+            cat "$RUNNER_TEMP/hub-runner-a.log"
+            echo "::endgroup::"
+            echo "::group::Runner B log"
+            cat "$RUNNER_TEMP/hub-runner-b.log"
+            echo "::endgroup::"
+            exit 1
+          fi

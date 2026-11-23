@@ -92,13 +92,13 @@ try {
   const online = await waitForBoth();
   console.log("Two runners connected:", online.map((r) => ({ runner_id: r.runner_id, status: r.status, tags: r.tags })));
 
+  await callTool("select_runner", { runner_id: runnerA });
   const tools = await rpc("tools/list", {});
   const bash = tools.result?.tools?.find((tool) => tool.name === "bash");
   if (!bash?.inputSchema?.properties?.runner_id || !bash?.inputSchema?.properties?.async) {
     throw new Error("Hub did not inject runner_id and async into the remote bash schema");
   }
 
-  await callTool("select_runner", { runner_id: runnerA });
   const selected = textOf(await callTool("bash", { command: "printf 'selected-runner-a'" }));
   if (!selected.includes("selected-runner-a")) throw new Error(`Session-pinned runner A failed: ${selected}`);
 

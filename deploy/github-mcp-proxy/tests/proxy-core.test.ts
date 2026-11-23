@@ -65,11 +65,27 @@ describe("proxy core",()=>{
   const invalid=await handleJsonRpcMessage({jsonrpc:"2.0",id:15,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"missing"}}} as any,e,{...sessionA,sessionId:"session-invalid"});
   expect(invalid.result.isError).toBe(true);
  });
- it("requires an initialized session to remember an account",async()=>{
-  const e=makeEnv();await clearAccountCaches(e);
-  vi.stubGlobal("fetch",vi.fn(async()=>Response.json(accountData)));
-  const r=await handleJsonRpcMessage({jsonrpc:"2.0",id:16,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"personal"}}} as any,e,{method:"static_token",subject:"test"});
-  expect(r.result.isError).toBe(true);expect(r.result.content[0].text).toContain("initialized MCP session");
+ it("scopes selection to authenticated client identity when transport omits a session id",async()=>{
+  const e=makeEnv();await clearAccountCaches(e);const upstreamCalls:any[]=[];
+  vi.stubGlobal("fetch",vi.fn(async(input:any,init:any)=>{
+   const url=String(input);
+   if(url.includes("accounts.json"))return Response.json(accountData);
+   if(url.includes("api.githubcopilot.com")){
+    const request=JSON.parse(init.body);const authorization=init.headers.get("Authorization");upstreamCalls.push({method:request.method,authorization});
+    if(request.method==="initialize")return Response.json({jsonrpc:"2.0",id:"proxy-init",result:{protocolVersion:"2025-03-26"}},{headers:{"Mcp-Session-Id":"upstream-"+authorization}});
+    return Response.json({jsonrpc:"2.0",id:request.id??"notification",result:{content:[{type:"text",text:"ok"}]}});
+   }
+   throw new Error("Unexpected fetch "+url);
+  }));
+  const clientA={method:"oauth" as const,subject:"oauth-client-a"};
+  const clientB={method:"oauth" as const,subject:"oauth-client-b"};
+  const chooseA=await handleJsonRpcMessage({jsonrpc:"2.0",id:16,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"personal"}}} as any,e,clientA);
+  const chooseB=await handleJsonRpcMessage({jsonrpc:"2.0",id:17,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"work"}}} as any,e,clientB);
+  expect(chooseA.result.isError).toBeFalsy();expect(chooseB.result.isError).toBeFalsy();
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:18,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e,clientA);
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:19,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e,clientB);
+  const auths=upstreamCalls.filter(x=>x.method==="tools/call").map(x=>x.authorization);
+  expect(auths).toEqual(["Bearer ghp_personal_pat","Bearer ghp_work_pat"]);
  });
 });
 describe("create_repository REST compatibility",()=>{

@@ -4,7 +4,7 @@ A Cloudflare Worker that proxies the official GitHub Remote MCP endpoint and sel
 
 ## Architecture
 
-- src/mcp: JSON-RPC proxy, dynamic upstream tool discovery, session-scoped account selection, and transports.
+- src/mcp: JSON-RPC proxy, dynamic upstream tool discovery, Durable-Object-backed account selection per MCP session/authenticated client, and transports.
 - src/rtdb: Firebase Service Account RS256 exchange and encrypted account cache.
 - src/auth: static token and OAuth 2.1.
 - scripts: environment validation, Cloudflare KV preparation, and strict runtime-secret allowlist.

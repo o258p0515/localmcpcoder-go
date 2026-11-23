@@ -175,7 +175,7 @@ jobs:
           ZONE_ID="$(jq -r '.result[0].id // empty' <<<"$ZONE_JSON")"
           ACCOUNT_ID="$(jq -r '.result[0].account.id // empty' <<<"$ZONE_JSON")"
           if [ -z "$ZONE_ID" ] || [ -z "$ACCOUNT_ID" ]; then
-            echo "::error title=Incomplete Cloudflare zone data::The zone response has no zone ID or account ID. Check account access and the API response above."
+            echo "::error title=Incomplete Cloudflare zone data::The zone response has no zone ID or account ID. Check account access and zone permissions."
             exit 1
           fi
           echo "Resolved zone $(jq -r '.result[0].name' <<<"$ZONE_JSON") (ID masked)."
@@ -219,3 +219,45 @@ jobs:
             cf_api "Create CNAME for $HOST" POST "/zones/$ZONE_ID/dns_records" "$RECORD" >/dev/null
           fi
           echo "Tunnel ingress and proxied CNAME configured for $HOST."
+          echo "::endgroup::"
+
+          echo "tunnel_token=$TUNNEL_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          echo "Cloudflare provisioning completed successfully for https://$HOST"
+
+      - name: Run MCP server
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
+          MCP_OAUTH_REDIRECT_URIS: ${{ secrets.MCP_OAUTH_REDIRECT_URIS }}
+          TUNNEL_TOKEN: ${{ steps.cloudflare.outputs.tunnel_token }}
+          TS_TRUST_CREDS: ${{ secrets.TS_TRUST_CREDS }}
+          TS_TAGS: ${{ secrets.TS_TAGS }}
+          TS_HOSTNAME: localmcpcoder-gha
+          MCP_HOST: ${{ steps.cloudflare.outputs.host }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TUNNEL_TOKEN:-}" ] || [ -z "${MCP_HOST:-}" ]; then
+            echo "::error title=Missing Cloudflare outputs::The tunnel provisioning step did not export a connector token or hostname."
+            exit 1
+          fi
+          ROOT="$RUNNER_TEMP/mcp-root"
+          mkdir -p "$ROOT"
+          echo "Starting MCP server; public endpoint: https://$MCP_HOST/mcp"
+          echo "Sensitive credentials are masked and will not be printed."
+          set +e
+          timeout --signal=TERM --kill-after=10s 20700s \
+            "$RUNNER_TEMP/localmcpcoder/mcp-linux-amd64" \
+            --root "$ROOT" --tunnel cloudflare --host "$MCP_HOST"
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 124 ]; then
+            echo "Planned 5h45m runner lifetime reached; graceful shutdown completed."
+            exit 0
+          fi
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error title=MCP server exited unexpectedly::MCP process returned exit code $STATUS. Review the preceding application and tunnel logs."
+          fi
+          exit "$STATUS"

@@ -1,6 +1,5 @@
 export interface Env {
   MCP_TOKEN: string;
-  HUB_SHARED_SECRET: string;
   ADMIN_TOKEN: string;
   REGISTRY_DO: DurableObjectNamespace;
   RUNNER_DO: DurableObjectNamespace;

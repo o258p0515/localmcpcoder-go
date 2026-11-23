@@ -34,7 +34,7 @@ export default {
     if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
     if (url.pathname === "/health") return withCors(Response.json({ status: "ok", service: "localmcp-hub", time: new Date().toISOString() }));
     if (url.pathname === "/internal/runner-ws") {
-      if (!authorized(request, env.HUB_SHARED_SECRET)) return new Response("unauthorized", { status: 401 });
+      if (!authorized(request, env.MCP_TOKEN)) return new Response("unauthorized", { status: 401 });
       if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("websocket upgrade required", { status: 426 });
       const id = url.searchParams.get("id") ?? "";
       if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(id)) return new Response("invalid runner id", { status: 400 });

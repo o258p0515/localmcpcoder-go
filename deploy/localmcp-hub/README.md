@@ -16,15 +16,14 @@ Every remote runner tool schema includes optional `runner_id` and `async` argume
 
 ## Deploy
 
-The `Deploy LocalMCP Hub` workflow runs on pushes to `feat/localmcp-hub` and can also be dispatched manually once available on the default branch. It resolves the Cloudflare zone from the existing `CF_DOMAIN`, creates only the new proxied `hub.<zone>` DNS name when absent, derives internal/admin secrets from `MCP_TOKEN`, deploys the Worker, and smoke-tests the endpoint. It never changes `CF_DOMAIN` or writes new GitHub Secrets. If a conflicting DNS record or an unrelated Worker route exists, deployment stops rather than taking it over.
+The `Deploy LocalMCP Hub` workflow runs on pushes to `feat/localmcp-hub` and can also be dispatched manually once available on the default branch. It resolves the Cloudflare zone from the existing `CF_DOMAIN`, creates only the new proxied `hub.<zone>` DNS name when absent, uses `MCP_TOKEN` for both MCP and runner authentication and derives only the separate admin token from `MCP_TOKEN`, deploys the Worker, and smoke-tests the endpoint. It never changes `CF_DOMAIN` or writes new GitHub Secrets. If a conflicting DNS record or an unrelated Worker route exists, deployment stops rather than taking it over.
 
 Runtime secrets:
 
 - `MCP_TOKEN`: existing bearer token.
-- `HUB_SHARED_SECRET`: HMAC-SHA256 derived from `MCP_TOKEN` and the Hub hostname.
 - `ADMIN_TOKEN`: separate HMAC-SHA256 derived from `MCP_TOKEN` and the Hub hostname.
 
-The latter two are derived at deploy/runner startup and are not persisted as GitHub Secrets.
+`ADMIN_TOKEN` is derived at deploy time and is not persisted as a GitHub Secret. The runner uses `MCP_TOKEN` directly; no `HUB_SHARED_SECRET` is required.
 
 ## Start GitHub Actions runners
 
@@ -51,15 +50,13 @@ go build -trimpath -o mcp ./cmd/mcp
 
 # Set the existing MCP token locally; do not commit it or print it in logs.
 export MCP_TOKEN='<existing MCP_TOKEN>'
-export HUB_DOMAIN='hub.<your-cloudflare-zone>'
-export HUB_SHARED_SECRET="$(printf '%s' "localmcp-hub-internal-v1:$HUB_DOMAIN" | openssl dgst -sha256 -hmac "$MCP_TOKEN" -hex | awk '{print $2}')"
-export HUB_URLS="wss://$HUB_DOMAIN"
+export HUB_URLS="https://hub.<your-cloudflare-zone>"
 export RUNNER_ID="workstation-$(hostname)"
 export RUNNER_TAGS="linux,go,workstation"
 
 mkdir -p ./workspace
 ./mcp --root ./workspace --tunnel hub --hub-urls "$HUB_URLS" \
-  --hub-secret "$HUB_SHARED_SECRET" --runner-id "$RUNNER_ID" \
+  --runner-id "$RUNNER_ID" \
   --runner-tags "$RUNNER_TAGS"
 ```
 
@@ -72,15 +69,13 @@ Set-Location .\go
 go build -trimpath -o mcp.exe ./cmd/mcp
 
 $env:MCP_TOKEN = '<existing MCP_TOKEN>'
-$env:HUB_DOMAIN = 'hub.<your-cloudflare-zone>'
-$env:HUB_SHARED_SECRET = node -e 'const c=require("node:crypto");process.stdout.write(c.createHmac("sha256",process.env.MCP_TOKEN).update("localmcp-hub-internal-v1:"+process.env.HUB_DOMAIN).digest("hex"))'
-$env:HUB_URLS = "wss://$($env:HUB_DOMAIN)"
+$env:HUB_URLS = 'https://hub.<your-cloudflare-zone>'
 $env:RUNNER_ID = "workstation-$env:COMPUTERNAME"
 $env:RUNNER_TAGS = "windows,go,workstation"
 
 New-Item -ItemType Directory -Force .\workspace | Out-Null
 .\mcp.exe --root .\workspace --tunnel hub --hub-urls $env:HUB_URLS \
-  --hub-secret $env:HUB_SHARED_SECRET --runner-id $env:RUNNER_ID \
+  --runner-id $env:RUNNER_ID \
   --runner-tags $env:RUNNER_TAGS
 ```
 

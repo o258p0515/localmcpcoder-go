@@ -23,74 +23,150 @@ var version = "dev"
 
 func main() {
 	cfg, err := config.Load()
-	if err != nil { log.Fatal(err) }
+	if err != nil {
+		log.Fatal(err)
+	}
 	resolver, err := fsx.New(cfg.Root, cfg.AllowOutsideRoot)
-	if err != nil { log.Fatal(err) }
+	if err != nil {
+		log.Fatal(err)
+	}
 	sk, err := skills.Load(cfg.Root, cfg.SkillsDir)
-	if err != nil { log.Fatal(err) }
-	reg := tools.New(tools.Deps{Config:cfg,Logger:log.Default(),FS:resolver,Root:cfg.Root,Shell:cfg.Shell,MaxOutput:cfg.MaxOutput,Skills:sk,SkillsDir:cfg.SkillsDir})
-	srv := server.New(cfg,reg,sk)
-	ctx, stop := signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
+	if err != nil {
+		log.Fatal(err)
+	}
+	reg := tools.New(tools.Deps{Config: cfg, Logger: log.Default(), FS: resolver, Root: cfg.Root, Shell: cfg.Shell, MaxOutput: cfg.MaxOutput, Skills: sk, SkillsDir: cfg.SkillsDir})
+	srv := server.New(cfg, reg, sk)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	addr:=fmt.Sprintf("127.0.0.1:%d",cfg.Port)
-	httpSrv:=&http.Server{Addr:addr,Handler:srv.Handler(),ReadHeaderTimeout:10*time.Second}
-	errCh:=make(chan error,1)
-	go func(){errCh<-httpSrv.ListenAndServe()}()
-	if err=waitLocal(ctx,addr);err!=nil{_=httpSrv.Close();log.Fatal(err)}
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+	httpSrv := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	errCh := make(chan error, 1)
+	go func() { errCh <- httpSrv.ListenAndServe() }()
+	if err = waitLocal(ctx, addr); err != nil {
+		_ = httpSrv.Close()
+		log.Fatal(err)
+	}
 
-	mode:=cfg.Tunnel
-	if mode=="hub" || cfg.HubURLs!="" {
-		hub, e := hubclient.New(hubclient.Config{HubURLs:cfg.HubURLs,Secret:cfg.HubSecret,Token:cfg.Token,RunnerID:cfg.RunnerID,RunnerTags:cfg.RunnerTags,Port:cfg.Port})
-		if e!=nil{_=httpSrv.Close();log.Fatal(e)}
-		hubCtx,cancelHub:=context.WithCancel(context.Background())
-		hubDone:=make(chan error,1)
-		go func(){hubDone<-hub.Run(hubCtx)}()
-		log.Printf("localmcpcoder-go %s Hub runner %s started; hubs=%s; local handler=%s (no cloudflared)",version,hub.RunnerID(),cfg.HubURLs,addr)
+	mode := cfg.Tunnel
+	if mode == "hub" || cfg.HubURLs != "" {
+		hub, e := hubclient.New(hubclient.Config{HubURLs: cfg.HubURLs, Token: cfg.Token, RunnerID: cfg.RunnerID, RunnerTags: cfg.RunnerTags, Port: cfg.Port})
+		if e != nil {
+			_ = httpSrv.Close()
+			log.Fatal(e)
+		}
+		hubCtx, cancelHub := context.WithCancel(context.Background())
+		hubDone := make(chan error, 1)
+		go func() { hubDone <- hub.Run(hubCtx) }()
+		log.Printf("localmcpcoder-go %s Hub runner %s started; hubs=%s; local handler=%s (no cloudflared)", version, hub.RunnerID(), cfg.HubURLs, addr)
 		select {
 		case <-ctx.Done():
-			shutdown,cancel:=context.WithTimeout(context.Background(),30*time.Second)
-			if e:=hub.Shutdown(shutdown);e!=nil{log.Printf("Hub graceful drain: %v",e)}
+			shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if e := hub.Shutdown(shutdown); e != nil {
+				log.Printf("Hub graceful drain: %v", e)
+			}
 			cancel()
-		case e:=<-errCh:
-			if e!=nil&&e!=http.ErrServerClosed{log.Printf("HTTP server stopped: %v",e)}
-			shutdown,cancel:=context.WithTimeout(context.Background(),30*time.Second);_=hub.Shutdown(shutdown);cancel()
-		case e:=<-hubDone:
-			if e!=nil&&e!=context.Canceled{log.Printf("Hub client stopped: %v",e)}
+		case e := <-errCh:
+			if e != nil && e != http.ErrServerClosed {
+				log.Printf("HTTP server stopped: %v", e)
+			}
+			shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = hub.Shutdown(shutdown)
+			cancel()
+		case e := <-hubDone:
+			if e != nil && e != context.Canceled {
+				log.Printf("Hub client stopped: %v", e)
+			}
 		}
 		cancelHub()
-		select{case <-hubDone:case <-time.After(2*time.Second):}
-		shutdown,cancel:=context.WithTimeout(context.Background(),10*time.Second);defer cancel();_=httpSrv.Shutdown(shutdown)
+		select {
+		case <-hubDone:
+		case <-time.After(2 * time.Second):
+		}
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutdown)
 		return
 	}
 
-	if mode=="auto" {
-		if os.Getenv("CF_API_TOKEN")!=""||os.Getenv("TUNNEL_TOKEN")!=""{mode="cloudflare"}else if os.Getenv("TS_AUTHKEY")!=""||os.Getenv("TS_TRUST_CREDS")!=""{mode="tailscale"}else{mode="none"}
+	if mode == "auto" {
+		if os.Getenv("CF_API_TOKEN") != "" || os.Getenv("TUNNEL_TOKEN") != "" {
+			mode = "cloudflare"
+		} else if os.Getenv("TS_AUTHKEY") != "" || os.Getenv("TS_TRUST_CREDS") != "" {
+			mode = "tailscale"
+		} else {
+			mode = "none"
+		}
 	}
-	p,e:=tunnel.Select(mode);if e!=nil{log.Fatal(e)}
-	public,stopTunnel,e:=p.Start(ctx,tunnel.Config{Host:cfg.Host,Port:cfg.Port,Provider:mode,TSHostname:cfg.TSHostname,TSMode:cfg.TSMode,TSTag:cfg.TSTag},addr)
-	if e!=nil{_=httpSrv.Close();log.Fatal(e)}
-	var stopTailscale func()error
-	if mode!="tailscale"&&os.Getenv("TS_TRUST_CREDS")!=""{
-		tsPublic,tsStop,tsErr:=(tunnel.Tailscale{}).Start(ctx,tunnel.Config{Port:cfg.Port,TSHostname:cfg.TSHostname,TSMode:"serve",TSTag:cfg.TSTag},addr)
-		if tsErr!=nil{if stopTunnel!=nil{_=stopTunnel()};_=httpSrv.Close();log.Fatalf("Tailscale setup failed: %v",tsErr)}
-		stopTailscale=tsStop;log.Printf("Tailscale node joined; private endpoint: %s",tsPublic)
+	p, e := tunnel.Select(mode)
+	if e != nil {
+		log.Fatal(e)
 	}
-	if public!=""{log.Printf("localmcpcoder-go %s ready: %s/mcp (root %s; tunnel=%s)",version,public,cfg.Root,mode)}else{log.Printf("localmcpcoder-go %s listening on %s (tunnel=%s; use the hostname configured on that tunnel)",version,addr,mode)}
-	if os.Getenv("GITHUB_ACTIONS")!="true"&&isTTY(){log.Printf("MCP passphrase: %s",cfg.Token)}
-	select{case <-ctx.Done():case e=<-errCh:if e!=nil&&e!=http.ErrServerClosed{log.Printf("HTTP server stopped: %v",e)}}
-	if stopTailscale!=nil{if te:=stopTailscale();te!=nil{log.Printf("stop Tailscale: %v",te)}}
-	if stopTunnel!=nil{if te:=stopTunnel();te!=nil{log.Printf("stop tunnel: %v",te)}}
-	shutdown,cancel:=context.WithTimeout(context.Background(),10*time.Second);defer cancel();_=httpSrv.Shutdown(shutdown)
+	public, stopTunnel, e := p.Start(ctx, tunnel.Config{Host: cfg.Host, Port: cfg.Port, Provider: mode, TSHostname: cfg.TSHostname, TSMode: cfg.TSMode, TSTag: cfg.TSTag}, addr)
+	if e != nil {
+		_ = httpSrv.Close()
+		log.Fatal(e)
+	}
+	var stopTailscale func() error
+	if mode != "tailscale" && os.Getenv("TS_TRUST_CREDS") != "" {
+		tsPublic, tsStop, tsErr := (tunnel.Tailscale{}).Start(ctx, tunnel.Config{Port: cfg.Port, TSHostname: cfg.TSHostname, TSMode: "serve", TSTag: cfg.TSTag}, addr)
+		if tsErr != nil {
+			if stopTunnel != nil {
+				_ = stopTunnel()
+			}
+			_ = httpSrv.Close()
+			log.Fatalf("Tailscale setup failed: %v", tsErr)
+		}
+		stopTailscale = tsStop
+		log.Printf("Tailscale node joined; private endpoint: %s", tsPublic)
+	}
+	if public != "" {
+		log.Printf("localmcpcoder-go %s ready: %s/mcp (root %s; tunnel=%s)", version, public, cfg.Root, mode)
+	} else {
+		log.Printf("localmcpcoder-go %s listening on %s (tunnel=%s; use the hostname configured on that tunnel)", version, addr, mode)
+	}
+	if os.Getenv("GITHUB_ACTIONS") != "true" && isTTY() {
+		log.Printf("MCP passphrase: %s", cfg.Token)
+	}
+	select {
+	case <-ctx.Done():
+	case e = <-errCh:
+		if e != nil && e != http.ErrServerClosed {
+			log.Printf("HTTP server stopped: %v", e)
+		}
+	}
+	if stopTailscale != nil {
+		if te := stopTailscale(); te != nil {
+			log.Printf("stop Tailscale: %v", te)
+		}
+	}
+	if stopTunnel != nil {
+		if te := stopTunnel(); te != nil {
+			log.Printf("stop tunnel: %v", te)
+		}
+	}
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(shutdown)
 }
 
-func waitLocal(ctx context.Context,addr string)error{
-	client:=http.Client{Timeout:time.Second}
-	for i:=0;i<50;i++{
-		req,_:=http.NewRequestWithContext(ctx,"GET","http://"+addr+"/health",nil)
-		r,e:=client.Do(req)
-		if e==nil{io.Copy(io.Discard,r.Body);r.Body.Close();if r.StatusCode==200{return nil}}
-		select{case <-ctx.Done():return ctx.Err();case <-time.After(100*time.Millisecond):}
+func waitLocal(ctx context.Context, addr string) error {
+	client := http.Client{Timeout: time.Second}
+	for i := 0; i < 50; i++ {
+		req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+addr+"/health", nil)
+		r, e := client.Do(req)
+		if e == nil {
+			io.Copy(io.Discard, r.Body)
+			r.Body.Close()
+			if r.StatusCode == 200 {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-	return fmt.Errorf("MCP server did not start on %s",addr)
+	return fmt.Errorf("MCP server did not start on %s", addr)
 }
-func isTTY()bool{fi,e:=os.Stdout.Stat();return e==nil&&fi.Mode()&os.ModeCharDevice!=0}
+func isTTY() bool { fi, e := os.Stdout.Stat(); return e == nil && fi.Mode()&os.ModeCharDevice != 0 }

@@ -26,8 +26,17 @@ function allowedRedirect(env: Env, value: string): boolean {
     const u = new URL(value);
     if (!["https:", "http:"].includes(u.protocol) || u.username || u.password || u.hash) return false;
     if (u.protocol === "http:" && u.hostname !== "localhost" && u.hostname !== "127.0.0.1" && u.hostname !== "[::1]") return false;
-    return redirects(env).includes(value);
+    const configured = redirects(env);
+    // "*" opts this confidential OAuth client into arbitrary HTTPS callback URLs.
+    // Loopback HTTP remains available for native/local clients. The exact redirect
+    // is embedded in the signed, single-use code and checked again at /token.
+    if (configured.includes("*")) return true;
+    return configured.includes(value);
   } catch { return false; }
+}
+function validPkceChallenge(value: string): boolean {
+  // RFC 7636 S256 challenge: BASE64URL(SHA256(verifier)), without padding.
+  return /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 async function key(env: Env): Promise<CryptoKey> {
   if (!env.HUB_SHARED_SECRET) throw new Error("Hub OAuth signing secret is not configured");
@@ -98,9 +107,10 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
   const url = new URL(request.url);
   if (url.pathname === "/authorize" && request.method === "GET") {
     const p = url.searchParams, clientId = p.get("client_id") ?? "", redirect = p.get("redirect_uri") ?? "";
+    const challenge = p.get("code_challenge") ?? "";
     if (p.get("response_type") !== "code" || !env.MCP_OAUTH_CLIENT_ID || !equal(clientId, env.MCP_OAUTH_CLIENT_ID) ||
-        !allowedRedirect(env, redirect) || !p.get("code_challenge") || p.get("code_challenge_method") !== "S256") {
-      return new Response("Invalid OAuth request: client, redirect URI and PKCE S256 are required", { status: 400 });
+        !allowedRedirect(env, redirect) || !validPkceChallenge(challenge) || p.get("code_challenge_method") !== "S256") {
+      return new Response("Invalid OAuth request: response_type=code, the configured client_id, a valid redirect_uri, code_challenge and code_challenge_method=S256 are required", { status: 400 });
     }
     const csrf = randomId();
     const html = '<!doctype html><meta charset="utf-8"><title>Authorize LocalMCP Hub</title><h1>Authorize LocalMCP Hub</h1><p>Client: ' +
@@ -121,7 +131,7 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
     }
     const clientId = b.client_id ?? "", redirect = b.redirect_uri ?? "";
     if (!env.MCP_OAUTH_CLIENT_ID || !equal(clientId, env.MCP_OAUTH_CLIENT_ID) || !allowedRedirect(env, redirect) ||
-        !b.code_challenge || !b.state && b.state !== "") return new Response("Invalid OAuth authorization", { status: 400 });
+        !validPkceChallenge(b.code_challenge ?? "") || b.state === undefined) return new Response("Invalid OAuth authorization", { status: 400 });
     const now = Math.floor(Date.now() / 1000);
     const codeJti = randomId();
     await registryGrant(env, "storeOAuthGrant", codeJti, "code", (now + 300) * 1000);

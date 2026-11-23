@@ -81,13 +81,15 @@ jobs:
             sleep 2
           done
           jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" '([.[].runner_id] | index($a) != null and index($b) != null)' /tmp/hub-runners.json >/dev/null
+          echo "Admin registry sees both requested runner IDs."
 
-          curl --fail --silent --show-error -D /tmp/hub-init.headers -o /tmp/hub-init.json \
+          SESSION_ID="hub-e2e-${GITHUB_RUN_ID}"
+          curl --fail --silent --show-error -o /tmp/hub-init.json \
             -X POST "$BASE_URL/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+            -H "Mcp-Session-Id: $SESSION_ID" \
             --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"hub-e2e","version":"1"}}}'
-          SESSION_ID=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r",""); print $2}' /tmp/hub-init.headers | tail -n1)
-          test -n "$SESSION_ID"
           jq -e '.result.serverInfo.name == "localmcp-hub"' /tmp/hub-init.json >/dev/null
+          echo "MCP initialize succeeded; session $SESSION_ID is active."
 
           mcp_call() {
             curl --fail --silent --show-error -X POST "$BASE_URL/mcp" \
@@ -112,7 +114,7 @@ jobs:
           test -n "$HOST_A" && test -n "$HOST_B"
           test "$HOST_A" != "$HOST_B"
           test "$HOST_DEFAULT" = "$HOST_A"
-          echo "Per-call runner_id routed to two distinct hosts; session selection defaulted to runner A."
+          echo "Per-call runner_id routed to two distinct hosts: A=$HOST_A B=$HOST_B default=$HOST_DEFAULT."
 
           ASYNC_CALL=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:"sleep 2; hostname",runner_id:$b,async:true}}}')
           ASYNC_RESPONSE=$(mcp_call "$ASYNC_CALL")

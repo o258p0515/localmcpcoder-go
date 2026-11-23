@@ -66,6 +66,31 @@ describe("proxy core",()=>{
   const invalid=await handleJsonRpcMessage({jsonrpc:"2.0",id:15,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"missing"}}} as any,e2,{...sessionA,sessionId:"session-invalid"});
   expect(invalid.result.isError).toBe(true);
  });
+ it("uses a client-level selection as the default for sessions that have no override",async()=>{
+  const sessions=durableObjects();const e=makeEnv(sessions),e2=makeEnv(sessions);await clearAccountCaches(e);const upstreamCalls:any[]=[];
+  vi.stubGlobal("fetch",vi.fn(async(input:any,init:any)=>{
+   const url=String(input);
+   if(url.includes("accounts.json"))return Response.json(accountData);
+   if(url.includes("api.githubcopilot.com")){
+    const request=JSON.parse(init.body);const authorization=init.headers.get("Authorization");upstreamCalls.push({method:request.method,authorization});
+    if(request.method==="initialize")return Response.json({jsonrpc:"2.0",id:"proxy-init",result:{protocolVersion:"2025-03-26"}},{headers:{"Mcp-Session-Id":"upstream-"+authorization}});
+    return Response.json({jsonrpc:"2.0",id:request.id??"notification",result:{content:[{type:"text",text:"ok"}]}});
+   }
+   throw new Error("Unexpected fetch "+url);
+  }));
+  const client={method:"oauth" as const,subject:"oauth-client-shared"};
+  const sessionA={...client,sessionId:"mcp-session-a"};
+  const sessionB={...client,sessionId:"mcp-session-b"};
+  const chooseDefault=await handleJsonRpcMessage({jsonrpc:"2.0",id:30,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"personal"}}} as any,e,client);
+  expect(chooseDefault.result.isError).toBeFalsy();
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:31,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,sessionA);
+  const chooseOverride=await handleJsonRpcMessage({jsonrpc:"2.0",id:32,method:"tools/call",params:{name:"select_github_account",arguments:{alias:"work"}}} as any,e2,sessionA);
+  expect(chooseOverride.result.isError).toBeFalsy();
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:33,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,sessionA);
+  await handleJsonRpcMessage({jsonrpc:"2.0",id:34,method:"tools/call",params:{name:"get_me",arguments:{}}} as any,e2,sessionB);
+  const auths=upstreamCalls.filter(x=>x.method==="tools/call").map(x=>x.authorization);
+  expect(auths).toEqual(["Bearer ghp_personal_pat","Bearer ghp_work_pat","Bearer ghp_personal_pat"]);
+ });
  it("scopes selection to authenticated client identity when transport omits a session id",async()=>{
   const sessions=durableObjects();const e=makeEnv(sessions),e2=makeEnv(sessions);await clearAccountCaches(e);const upstreamCalls:any[]=[];
   vi.stubGlobal("fetch",vi.fn(async(input:any,init:any)=>{

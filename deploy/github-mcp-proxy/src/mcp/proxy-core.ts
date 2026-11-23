@@ -3,7 +3,7 @@ import { getAccounts,listPublicAccounts,resolveAccount,clearAccountCaches } from
 import { callUpstream,clearUpstreamSessions } from "./upstream-client";
 import { getProxyCustomTools,injectAccountParameter } from "./schema-injector";
 import { auditLog } from "../utils/logger";
-const INSTRUCTIONS="You are connected to a multi-account GitHub MCP Proxy. Call list_github_accounts, then select_github_account with the exact alias. The selection is remembered per MCP session; when a client omits MCP session IDs it is scoped to the authenticated client identity. Separate sessions or OAuth clients are isolated. Static-token clients share one identity unless they use X-GitHub-Account or distinct credentials. You may still pass account explicitly for a one-off call. Invalid or missing aliases are rejected; no fallback is performed. After RTDB changes call refresh_accounts.";
+const INSTRUCTIONS="You are connected to a multi-account GitHub MCP Proxy. Call list_github_accounts, then select_github_account with the exact alias. A selection made inside an MCP session is scoped to that session; a selection made without a session ID becomes the authenticated client's default for its sessions, which can override it with their own selection. Separate OAuth clients are isolated. Static-token clients share one identity unless they use X-GitHub-Account or distinct credentials. You may still pass account explicitly for a one-off call. Invalid or missing aliases are rejected; no fallback to another account is performed. After RTDB changes call refresh_accounts.";
 function result(id:any,value:any){return {jsonrpc:"2.0",id,result:value};}
 function error(id:any,code:number,message:string){return {jsonrpc:"2.0",id,error:{code,message}};}
 function textResult(value:any,isError=false){return {content:[{type:"text",text:typeof value==="string"?value:JSON.stringify(value,null,2)}],...(isError?{isError:true}:{})};}
@@ -14,12 +14,20 @@ async function saveAccountSelection(env:Env,ctx:AuthContext,alias:string){
  const response=await stub.fetch("https://session.internal/_internal/account-selection",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({alias})});
  if(!response.ok)throw Error("Failed to persist GitHub account selection (HTTP "+response.status+")");
 }
-async function loadAccountSelection(env:Env,ctx:AuthContext):Promise<string|null>{
+async function readAccountSelection(env:Env,ctx:AuthContext):Promise<string|null>{
  const stub=env.SSE_SESSIONS.get(env.SSE_SESSIONS.idFromName(accountSelectionKey(ctx)));
  const response=await stub.fetch("https://session.internal/_internal/account-selection");
  if(!response.ok)throw Error("Failed to read GitHub account selection (HTTP "+response.status+")");
  const value=await response.json() as {alias?:unknown};
  return typeof value.alias==="string"?value.alias:null;
+}
+async function loadAccountSelection(env:Env,ctx:AuthContext):Promise<string|null>{
+ if(ctx.sessionId){
+  const sessionSelection=await readAccountSelection(env,ctx);
+  if(sessionSelection)return sessionSelection;
+  return readAccountSelection(env,{...ctx,sessionId:undefined});
+ }
+ return readAccountSelection(env,ctx);
 }
 async function createRepositoryWithRest(account:import("../types").RtdbAccount,args:Record<string,any>){
  const name=String(args.name||"").trim();

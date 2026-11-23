@@ -8,6 +8,7 @@ function result(id:any,value:any){return {jsonrpc:"2.0",id,result:value};}
 function error(id:any,code:number,message:string){return {jsonrpc:"2.0",id,error:{code,message}};}
 function textResult(value:any,isError=false){return {content:[{type:"text",text:typeof value==="string"?value:JSON.stringify(value,null,2)}],...(isError?{isError:true}:{})};}
 function accountSelectionKey(ctx:AuthContext){const scope=ctx.sessionId?"session:"+encodeURIComponent(ctx.sessionId):"client";return "mcp:account-selection:"+ctx.method+":"+encodeURIComponent(ctx.subject)+":"+scope;}
+async function identityFingerprint(ctx:AuthContext){const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(ctx.method+":"+ctx.subject));return Array.from(new Uint8Array(digest).slice(0,6)).map(x=>x.toString(16).padStart(2,"0")).join("");}
 async function saveAccountSelection(env:Env,ctx:AuthContext,alias:string){
  const stub=env.SSE_SESSIONS.get(env.SSE_SESSIONS.idFromName(accountSelectionKey(ctx)));
  const response=await stub.fetch("https://session.internal/_internal/account-selection",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({alias})});
@@ -62,12 +63,12 @@ export async function handleJsonRpcMessage(msg:JsonRpc,env:Env,ctx:AuthContext):
     const selected=await resolveAccount(env,selectedAlias);
     if(!selected.ok){const available=selected.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("Invalid GitHub account alias "+JSON.stringify(selectedAlias)+". Available aliases:\n"+available,true));}
     await saveAccountSelection(env,ctx,selectedAlias);
-    return result(msg.id,textResult({message:"GitHub account selected",scope:ctx.sessionId?"mcp_session":"authenticated_client",alias:selectedAlias,username:selected.account.username,readonly:selected.account.readonly}));
+    return result(msg.id,textResult({message:"GitHub account selected",scope:ctx.sessionId?"mcp_session":"authenticated_client",identity_fingerprint:await identityFingerprint(ctx),alias:selectedAlias,username:selected.account.username,readonly:selected.account.readonly}));
    }
    if(name==="refresh_accounts"){await clearAccountCaches(env);clearUpstreamSessions();const a=await listPublicAccounts(env);return result(msg.id,textResult({message:"Account and tool catalog caches refreshed",accounts:a}));}
    const remembered=await loadAccountSelection(env,ctx);
    const alias=String(args.account||ctx.pinnedAccount||remembered||"");const resolved=await resolveAccount(env,alias);
-   if(!resolved.ok){const available=resolved.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");return result(msg.id,textResult("No valid GitHub account is selected for this MCP session (received: "+JSON.stringify(alias)+"). Call list_github_accounts, then select_github_account with an exact alias. You may also pass account for a one-off call. This proxy does NOT auto-fallback. Available aliases:\n"+available,true));}
+   if(!resolved.ok){const available=resolved.availableAccounts.map(a=>"- "+a.alias+" (username: "+a.username+", readonly: "+a.readonly+", orgs: ["+a.orgs.join(", ")+"]): "+a.description).join("\n");const scope=ctx.sessionId?"mcp_session":"authenticated_client";const fingerprint=await identityFingerprint(ctx);return result(msg.id,textResult("No valid GitHub account is selected (received: "+JSON.stringify(alias)+", scope: "+scope+", identity: "+fingerprint+"). Call list_github_accounts, then select_github_account with an exact alias. You may also pass account for a one-off call. This proxy does NOT auto-fallback. Available aliases:\n"+available,true));}
    const account=resolved.account;
    const writeTool=/(?:^|_)(?:write|create|update|delete|push|merge|add|remove|fork|dismiss|submit|request|close|reopen|assign|cancel|rerun|enable|disable|set|put|patch)(?:_|$)/i;
    // This tool starts a repository security scan even though its name does not

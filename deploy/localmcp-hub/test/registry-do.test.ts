@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { RegistryDO } from "../src/registry-do";
 import type { Env } from "../src/types";
 
@@ -75,9 +75,11 @@ describe("RegistryDO", () => {
   });
   it("lists runners in most-recently-connected order", async () => {
     const { registry } = makeRegistry();
+    const clock = vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(200);
     await action(registry, { action: "register", runner_id: "older", os: "linux", arch: "amd64" });
     await action(registry, { action: "register", runner_id: "newer", os: "linux", arch: "arm64" });
     const result = await (await action(registry, { action: "listRunners" })).json() as any;
     expect(result.result.map((r: any) => r.runner_id)).toEqual(["newer", "older"]);
+    clock.mockRestore();
   });
 });

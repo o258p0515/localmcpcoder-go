@@ -1,9 +1,9 @@
 import type { Env } from "./types";
 
-type Claims = { typ: "code" | "access" | "refresh"; sub: string; exp: number; redirect_uri?: string; challenge?: string; state?: string; jti: string };
+type Claims = { typ: "code" | "access" | "refresh"; sub: string; exp: number; scope?: string; redirect_uri?: string; challenge?: string; state?: string; jti: string };
 const enc = (bytes: Uint8Array) => {
   let raw = ""; for (const byte of bytes) raw += String.fromCharCode(byte);
-  return btoa(raw).replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+  return btoa(raw).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 };
 const dec = (value: string) => {
   const raw = atob(value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4));
@@ -19,7 +19,7 @@ function redirects(env: Env): string[] {
   const raw = env.MCP_OAUTH_REDIRECT_URIS?.trim() ?? "";
   if (!raw) return [];
   try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) return parsed.filter((v): v is string => typeof v === "string"); } catch { /* accept newline/comma separated secrets */ }
-  return raw.split(/[\\r\\n,]+/).map((v) => v.trim()).filter(Boolean);
+  return raw.split(/[\r\n,]+/).map((v) => v.trim()).filter(Boolean);
 }
 function allowedRedirect(env: Env, value: string): boolean {
   try {
@@ -70,7 +70,7 @@ function clientValid(env: Env, id: string, secret: string): boolean {
 }
 async function issueTokens(env: Env, clientId: string) {
   const now = Math.floor(Date.now() / 1000);
-  const access_token = await sign(env, { typ: "access", sub: clientId, exp: now + 86400, jti: randomId() });
+  const access_token = await sign(env, { typ: "access", sub: clientId, scope: "mcp:tools", exp: now + 86400, jti: randomId() });
   const refresh_token = await sign(env, { typ: "refresh", sub: clientId, exp: now + 2592000, jti: randomId() });
   return { access_token, token_type: "Bearer", expires_in: 86400, refresh_token, scope: "mcp:tools" };
 }
@@ -82,7 +82,7 @@ export async function verifyOAuthAccessToken(token: string, signingSecret: strin
     if (!payload || !signature || extra) return false;
     if (!await crypto.subtle.verify("HMAC", signingKey, dec(signature), new TextEncoder().encode(payload))) return false;
     const claims = JSON.parse(new TextDecoder().decode(dec(payload))) as Claims;
-    return claims.typ === "access" && !!claims.sub && claims.exp > Math.floor(Date.now() / 1000);
+    return claims.typ === "access" && !!claims.sub && claims.scope === "mcp:tools" && claims.exp > Math.floor(Date.now() / 1000);
   } catch { return false; }
 }
 export async function handleOAuthRequest(request: Request, env: Env): Promise<Response> {
@@ -106,7 +106,7 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
       "Set-Cookie": "hub_oauth_csrf=" + csrf + "; HttpOnly; Secure; SameSite=Lax; Path=/authorize; Max-Age=600" } });
   }
   if (url.pathname === "/authorize" && request.method === "POST") {
-    const b = await form(request), cookie = request.headers.get("Cookie") ?? "", match = /(?:^|;\\s*)hub_oauth_csrf=([^;]+)/.exec(cookie);
+    const b = await form(request), cookie = request.headers.get("Cookie") ?? "", match = /(?:^|;\s*)hub_oauth_csrf=([^;]+)/.exec(cookie);
     if (!match || !equal(match[1] ?? "", b.csrf ?? "") || !env.MCP_TOKEN || !equal(b.approval_token ?? "", env.MCP_TOKEN)) {
       return new Response("Authorization denied", { status: 403 });
     }
@@ -121,7 +121,7 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
   if (url.pathname === "/token" && request.method === "POST") {
     const b = await form(request);
     let clientId = b.client_id ?? "", clientSecret = b.client_secret ?? "";
-    const basic = request.headers.get("Authorization")?.match(/^Basic\\s+(.+)$/i)?.[1];
+    const basic = request.headers.get("Authorization")?.match(/^Basic\s+(.+)$/i)?.[1];
     if (basic) {
       try { const decoded = atob(basic); const i = decoded.indexOf(":"); clientId = decoded.slice(0, i); clientSecret = decoded.slice(i + 1); }
       catch { return json({ error: "invalid_client" }, 401); }

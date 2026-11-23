@@ -7,19 +7,19 @@ on:
       runner_a_id:
         description: "Online runner ID A"
         type: string
-        required: true
+        required: false
       runner_a_run_id:
         description: "GitHub Actions run ID that started runner A (cancelled after test)"
         type: string
-        required: true
+        required: false
       runner_b_id:
         description: "Online runner ID B"
         type: string
-        required: true
+        required: false
       runner_b_run_id:
         description: "GitHub Actions run ID that started runner B (used only when cancellation is enabled)"
         type: string
-        required: true
+        required: false
       cancel_runners:
         description: "Cancel the supplied runner workflows after testing; leave false for persistent runners"
         type: boolean
@@ -65,9 +65,30 @@ jobs:
         run: |
           set -euo pipefail
           BASE_URL="https://$HUB_DOMAIN"
-          for value in "$RUNNER_A_RUN_ID" "$RUNNER_B_RUN_ID"; do
-            if ! [[ "$value" =~ ^[0-9]+$ ]]; then echo "::error::Runner workflow run IDs must be numeric"; exit 1; fi
-          done
+          if [ -z "$RUNNER_A_ID" ] && [ -z "$RUNNER_B_ID" ]; then
+            for attempt in $(seq 1 30); do
+              curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/hub-runners-discovery.json
+              mapfile -t discovered < <(jq -r '[.[] | select(.status == "online" and ((.tags // []) | index("e2e") != null)) | .runner_id] | .[:2][]' /tmp/hub-runners-discovery.json)
+              if [ "${#discovered[@]}" -ge 2 ]; then
+                RUNNER_A_ID="${discovered[0]}"
+                RUNNER_B_ID="${discovered[1]}"
+                break
+              fi
+              sleep 2
+            done
+          fi
+          if [ -z "$RUNNER_A_ID" ] || [ -z "$RUNNER_B_ID" ]; then
+            echo "::error::Provide both runner IDs or connect two online runners tagged e2e"
+            exit 1
+          fi
+          if [ "$CANCEL_RUNNERS" = "true" ]; then
+            RUNNER_A_RUN_ID="${RUNNER_A_RUN_ID:-${RUNNER_A_ID##*-}}"
+            RUNNER_B_RUN_ID="${RUNNER_B_RUN_ID:-${RUNNER_B_ID##*-}}"
+            for value in "$RUNNER_A_RUN_ID" "$RUNNER_B_RUN_ID"; do
+              if ! [[ "$value" =~ ^[0-9]+$ ]]; then echo "::error::Runner workflow run IDs must be numeric when cancellation is enabled"; exit 1; fi
+            done
+          fi
+          echo "E2E target runners: A=$RUNNER_A_ID B=$RUNNER_B_ID"
           cancel_runners() {
             gh run cancel "$RUNNER_A_RUN_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
             gh run cancel "$RUNNER_B_RUN_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true

@@ -1,0 +1,133 @@
+name: LocalMCP Hub Multi-Runner E2E
+on:
+  workflow_dispatch:
+    inputs:
+      runner_a_id:
+        description: "Online runner ID A"
+        type: string
+        required: true
+      runner_a_run_id:
+        description: "GitHub Actions run ID that started runner A (cancelled after test)"
+        type: string
+        required: true
+      runner_b_id:
+        description: "Online runner ID B"
+        type: string
+        required: true
+      runner_b_run_id:
+        description: "GitHub Actions run ID that started runner B (cancelled after test)"
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: localmcp-hub-e2e-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Resolve Hub endpoint and derive access tokens
+        working-directory: deploy/localmcp-hub
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: node scripts/derive-runner-env.mjs
+      - name: Validate two independent runners, session selection, per-call routing, async jobs and cleanup
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          RUNNER_A_ID: ${{ inputs.runner_a_id }}
+          RUNNER_A_RUN_ID: ${{ inputs.runner_a_run_id }}
+          RUNNER_B_ID: ${{ inputs.runner_b_id }}
+          RUNNER_B_RUN_ID: ${{ inputs.runner_b_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="https://$HUB_DOMAIN"
+          for value in "$RUNNER_A_RUN_ID" "$RUNNER_B_RUN_ID"; do
+            if ! [[ "$value" =~ ^[0-9]+$ ]]; then echo "::error::Runner workflow run IDs must be numeric"; exit 1; fi
+          done
+          cancel_runners() {
+            gh run cancel "$RUNNER_A_RUN_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+            gh run cancel "$RUNNER_B_RUN_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+          }
+          trap cancel_runners EXIT
+
+          curl --fail --silent --show-error "$BASE_URL/health" | jq -e '.status == "ok"'
+          for attempt in $(seq 1 30); do
+            curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/hub-runners.json || true
+            if jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" '([.[].runner_id] | index($a) != null and index($b) != null)' /tmp/hub-runners.json >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" '([.[].runner_id] | index($a) != null and index($b) != null)' /tmp/hub-runners.json >/dev/null
+
+          curl --fail --silent --show-error -D /tmp/hub-init.headers -o /tmp/hub-init.json \
+            -X POST "$BASE_URL/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"hub-e2e","version":"1"}}}'
+          SESSION_ID=$(awk 'BEGIN{IGNORECASE=1} /^Mcp-Session-Id:/ {gsub("\r",""); print $2}' /tmp/hub-init.headers | tail -n1)
+          test -n "$SESSION_ID"
+          jq -e '.result.serverInfo.name == "localmcp-hub"' /tmp/hub-init.json >/dev/null
+
+          mcp_call() {
+            curl --fail --silent --show-error -X POST "$BASE_URL/mcp" \
+              -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+              -H "Mcp-Session-Id: $SESSION_ID" --data "$1"
+          }
+          TOOLS=$(mcp_call '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+          echo "$TOOLS" | jq -e '.result.tools[] | select(.name=="bash") | ((.inputSchema // .input_schema).properties.runner_id.type=="string" and (.inputSchema // .input_schema).properties.async.type=="boolean")' >/dev/null
+
+          RUNNERS=$(mcp_call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_runners","arguments":{}}}')
+          echo "$RUNNERS" | jq -r '.result.content[0].text' | jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" '([.runners[].runner_id] | index($a) != null and index($b) != null)' >/dev/null
+
+          SELECT=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$a}}}')
+          mcp_call "$SELECT" | jq -e '.result.content[0].text | contains("runner_id")' >/dev/null
+
+          CALL_A=$(jq -cn --arg a "$RUNNER_A_ID" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$a}}}')
+          CALL_B=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"hostname",runner_id:$b}}}')
+          CALL_DEFAULT='{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"bash","arguments":{"command":"hostname"}}}'
+          HOST_A=$(mcp_call "$CALL_A" | jq -r '.result.content[0].text' | head -n1)
+          HOST_B=$(mcp_call "$CALL_B" | jq -r '.result.content[0].text' | head -n1)
+          HOST_DEFAULT=$(mcp_call "$CALL_DEFAULT" | jq -r '.result.content[0].text' | head -n1)
+          test -n "$HOST_A" && test -n "$HOST_B"
+          test "$HOST_A" != "$HOST_B"
+          test "$HOST_DEFAULT" = "$HOST_A"
+          echo "Per-call runner_id routed to two distinct hosts; session selection defaulted to runner A."
+
+          ASYNC_CALL=$(jq -cn --arg b "$RUNNER_B_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:"sleep 2; hostname",runner_id:$b,async:true}}}')
+          ASYNC_RESPONSE=$(mcp_call "$ASYNC_CALL")
+          JOB_ID=$(echo "$ASYNC_RESPONSE" | jq -r '.result.content[0].text | fromjson | .job_id')
+          test -n "$JOB_ID" && test "$JOB_ID" != "null"
+          JOB_DATA=""
+          for attempt in $(seq 1 30); do
+            JOB_CALL=$(jq -cn --arg b "$RUNNER_B_ID" --arg job "$JOB_ID" '{jsonrpc:"2.0",id:9,method:"tools/call",params:{name:"get_job_result",arguments:{runner_id:$b,job_id:$job}}}')
+            JOB_RESPONSE=$(mcp_call "$JOB_CALL")
+            JOB_DATA=$(echo "$JOB_RESPONSE" | jq -r '.result.content[0].text | fromjson')
+            STATUS=$(echo "$JOB_DATA" | jq -r '.status')
+            if [ "$STATUS" = "completed" ]; then break; fi
+            if [ "$STATUS" = "failed" ]; then echo "$JOB_DATA"; exit 1; fi
+            sleep 1
+          done
+          echo "$JOB_DATA" | jq -e '.status == "completed" and (.result.result.content[0].text | length > 0)' >/dev/null
+          echo "Async job $JOB_ID completed and its result was retrieved."
+
+          cancel_runners
+          for attempt in $(seq 1 30); do
+            curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/hub-runners-after.json
+            if jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" 'all(.[]; .runner_id != $a and .runner_id != $b)' /tmp/hub-runners-after.json >/dev/null; then break; fi
+            sleep 2
+          done
+          jq -e --arg a "$RUNNER_A_ID" --arg b "$RUNNER_B_ID" 'all(.[]; .runner_id != $a and .runner_id != $b)' /tmp/hub-runners-after.json >/dev/null
+          echo "Both runner workflows were cancelled and both runner registrations disappeared."
+          trap - EXIT

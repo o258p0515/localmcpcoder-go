@@ -51,7 +51,7 @@ describe("MCP Hub routing", () => {
     const { env } = fakeEnv();
     const response = await handleMcp(request({ jsonrpc: "2.0", id: 1, method: "tools/list" }), env, "session-1");
     const body = await response.json() as any;
-    expect(body.result.tools.map((tool: any) => tool.name)).toEqual(["list_runners", "select_runner", "get_job_result"]);
+    expect(body.result.tools.map((tool: any) => tool.name)).toEqual(["list_runners", "select_runner", "get_job_result", "bash"]);
   });
   it("pins a session and injects runner routing arguments into remote tool schemas", async () => {
     const { env } = fakeEnv();

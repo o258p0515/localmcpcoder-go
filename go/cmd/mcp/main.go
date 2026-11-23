@@ -40,7 +40,7 @@ func main() {
 
 	mode:=cfg.Tunnel
 	if mode=="hub" || cfg.HubURLs!="" {
-		hub, e := hubclient.New(hubclient.Config{HubURLs:cfg.HubURLs,Secret:cfg.HubSecret,Token:cfg.Token,RunnerID:cfg.RunnerID,RunnerTags:cfg.RunnerTags,Port:cfg.Port})
+		hub, e := hubclient.New(hubclient.Config{HubURLs:cfg.HubURLs,Token:cfg.Token,RunnerID:cfg.RunnerID,RunnerTags:cfg.RunnerTags,Port:cfg.Port})
 		if e!=nil{_=httpSrv.Close();log.Fatal(e)}
 		hubCtx,cancelHub:=context.WithCancel(context.Background())
 		hubDone:=make(chan error,1)

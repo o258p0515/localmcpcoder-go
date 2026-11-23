@@ -12,7 +12,7 @@ const registryStub = { async fetch(_input: any, init: any) {
   }
   return Response.json({ error: "unknown action" }, { status: 400 });
 } };
-const env = { MCP_TOKEN: "mcp-static-token", HUB_SHARED_SECRET: "hub-signing-secret",
+const env = { MCP_TOKEN: "mcp-static-token",
   MCP_OAUTH_CLIENT_ID: "connector-client", MCP_OAUTH_CLIENT_SECRET: "connector-secret",
   MCP_OAUTH_REDIRECT_URIS: '["https://connector.example/callback"]',
   REGISTRY_DO: { idFromName: () => "global", get: () => registryStub } } as unknown as Env;
@@ -37,8 +37,8 @@ describe("Hub OAuth", () => {
     const tokenResponse = await handleOAuthRequest(new Request("https://hub.example/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tokenForm }), env);
     expect(tokenResponse.status).toBe(200);
     const tokens = await tokenResponse.json() as any;
-    expect(await verifyOAuthAccessToken(tokens.access_token, env.HUB_SHARED_SECRET)).toBe(true);
-    expect(await verifyOAuthAccessToken(tokens.access_token + "tampered", env.HUB_SHARED_SECRET)).toBe(false);
+    expect(await verifyOAuthAccessToken(tokens.access_token, env.MCP_TOKEN)).toBe(true);
+    expect(await verifyOAuthAccessToken(tokens.access_token + "tampered", env.MCP_TOKEN)).toBe(false);
     const replay = await handleOAuthRequest(new Request("https://hub.example/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tokenForm }), env);
     expect(replay.status).toBe(400);
     const refreshForm = new URLSearchParams({ grant_type: "refresh_token", client_id: "connector-client", client_secret: "connector-secret", refresh_token: tokens.refresh_token });

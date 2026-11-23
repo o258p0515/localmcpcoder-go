@@ -1,7 +1,5 @@
 name: LocalMCP Hub Runner
 on:
-  push:
-    branches: [feat/localmcp-hub]
   workflow_dispatch:
     inputs:
       runner_name:
@@ -26,7 +24,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   runner:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
@@ -34,45 +31,34 @@ jobs:
         with:
           ref: ${{ github.ref }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
           cache-dependency-path: go/go.mod
-      - name: Validate duration and credentials
+      - name: Validate Hub configuration
         env:
-          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
+        shell: bash
         run: |
           set -euo pipefail
-          for name in CF_API_EMAIL CF_API_KEY CF_DOMAIN MCP_TOKEN; do
+          for name in HUB_URLS MCP_TOKEN; do
             if [ -z "${!name:-}" ]; then echo "::error title=Missing secret::$name is required"; exit 1; fi
           done
+          if [ "${#MCP_TOKEN}" -lt 16 ]; then echo "::error title=Invalid token::MCP_TOKEN must be at least 16 characters"; exit 1; fi
           if ! [[ "$DURATION_SECONDS" =~ ^[0-9]+$ ]] || [ "$DURATION_SECONDS" -lt 60 ] || [ "$DURATION_SECONDS" -gt 20400 ]; then
             echo "::error title=Invalid duration::duration_seconds must be between 60 and 20400"; exit 1
           fi
-      - name: Resolve Hub endpoint and derive runner secret
-        working-directory: deploy/localmcp-hub
-        env:
-          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
-          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
-        run: node scripts/derive-runner-env.mjs
       - name: Build and test Go runner
         working-directory: go
         run: |
           set -euo pipefail
-          go mod tidy
           go test ./...
           go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp
       - name: Start outbound Hub runner
         env:
+          HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name }}
           LOCALMCP_RUNNER_TAGS: ${{ inputs.runner_tags }}
@@ -84,12 +70,12 @@ jobs:
           ROOT="$RUNNER_TEMP/mcp-root"
           mkdir -p "$ROOT"
           LOCALMCP_RUNNER_ID="${LOCALMCP_RUNNER_NAME:-gha}-${GITHUB_RUN_ID}"
-          HUB_URLS="wss://$HUB_DOMAIN"
+          echo "::add-mask::$HUB_URLS"
           echo "Starting runner $LOCALMCP_RUNNER_ID for $DURATION_SECONDS seconds; Hub endpoint is masked."
           set +e
           timeout --signal=TERM --kill-after=40s "${DURATION_SECONDS}s" \
             "$RUNNER_TEMP/localmcpcoder-mcp" --root "$ROOT" --tunnel hub \
-            --hub-urls "$HUB_URLS" --hub-secret "$HUB_SHARED_SECRET" \
+            --hub-urls "$HUB_URLS" \
             --runner-id "$LOCALMCP_RUNNER_ID" --runner-tags "$LOCALMCP_RUNNER_TAGS"
           STATUS=$?
           set -e

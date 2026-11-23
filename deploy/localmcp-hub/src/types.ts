@@ -1,6 +1,5 @@
 export interface Env {
   MCP_TOKEN: string;
-  HUB_SHARED_SECRET: string;
   ADMIN_TOKEN: string;
   MCP_OAUTH_CLIENT_ID?: string;
   MCP_OAUTH_CLIENT_SECRET?: string;

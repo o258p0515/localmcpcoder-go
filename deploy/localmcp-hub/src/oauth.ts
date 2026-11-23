@@ -30,8 +30,8 @@ function allowedRedirect(env: Env, value: string): boolean {
   } catch { return false; }
 }
 async function key(env: Env): Promise<CryptoKey> {
-  if (!env.HUB_SHARED_SECRET) throw new Error("Hub OAuth signing secret is not configured");
-  return crypto.subtle.importKey("raw", new TextEncoder().encode(env.HUB_SHARED_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  if (!env.MCP_TOKEN) throw new Error("MCP_TOKEN is not configured");
+  return crypto.subtle.importKey("raw", new TextEncoder().encode(env.MCP_TOKEN), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
 async function sign(env: Env, claims: Claims): Promise<string> {
   const payload = enc(new TextEncoder().encode(JSON.stringify(claims)));

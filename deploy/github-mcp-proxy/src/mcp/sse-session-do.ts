@@ -7,7 +7,7 @@ export class SseSessionDO {
  constructor(_state:DurableObjectState,env:Env){this.env=env;}
  async fetch(req:Request):Promise<Response>{
   const u=new URL(req.url);
-  const method=req.headers.get("X-Proxy-Auth-Method");if(method==="oauth"||method==="static_token")this.auth={method,subject:req.headers.get("X-Proxy-Subject")||"proxy",pinnedAccount:req.headers.get("X-GitHub-Account")||undefined};
+  const method=req.headers.get("X-Proxy-Auth-Method");if(method==="oauth"||method==="static_token")this.auth={method,subject:req.headers.get("X-Proxy-Subject")||"proxy",pinnedAccount:req.headers.get("X-GitHub-Account")||undefined,sessionId:u.searchParams.get("sessionId")||undefined};
   if(req.method==="GET"&&u.pathname.endsWith("/sse")){
    if(this.writer)try{await this.writer.close();}catch{}
    const stream=new TransformStream<Uint8Array,Uint8Array>();this.writer=stream.writable.getWriter();

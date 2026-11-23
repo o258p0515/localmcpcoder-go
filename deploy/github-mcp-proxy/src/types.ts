@@ -10,6 +10,6 @@ export interface Env {
   RTDB_CACHE_TTL_SECONDS?: string; OAUTH_KV: KVNamespace; CACHE_KV: KVNamespace;
   SSE_SESSIONS: DurableObjectNamespace;
 }
-export interface AuthContext { authenticated?: boolean; method: "static_token" | "oauth"; subject: string; pinnedAccount?: string }
+export interface AuthContext { authenticated?: boolean; method: "static_token" | "oauth"; subject: string; pinnedAccount?: string; sessionId?: string }
 export interface McpTool { name: string; description?: string; inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[]; [key:string]: unknown }; [key:string]: unknown }
 export interface JsonRpc { jsonrpc: "2.0"; id?: string|number|null; method: string; params?: any }

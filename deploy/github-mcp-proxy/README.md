@@ -4,7 +4,7 @@ A Cloudflare Worker that proxies the official GitHub Remote MCP endpoint and sel
 
 ## Architecture
 
-- src/mcp: JSON-RPC proxy, dynamic upstream tool discovery, mandatory account schema injection, and transports.
+- src/mcp: JSON-RPC proxy, dynamic upstream tool discovery, session-scoped account selection, and transports.
 - src/rtdb: Firebase Service Account RS256 exchange and encrypted account cache.
 - src/auth: static token and OAuth 2.1.
 - scripts: environment validation, Cloudflare KV preparation, and strict runtime-secret allowlist.
@@ -55,4 +55,4 @@ TS_TRUST_CREDS is used only by the local Go runner and is never sent to the Work
 - Gemini CLI / Cursor / Windsurf / Grok / custom agents: Streamable HTTP URL https://<WORKER_DOMAIN>/mcp, with Authorization: Bearer <MCP_TOKEN> or X-API-Key: <MCP_TOKEN>. Optional X-GitHub-Account: <alias> pins an account.
 - Legacy clients: https://<WORKER_DOMAIN>/sse with the same static token or OAuth access token.
 
-Before using GitHub tools, call list_github_accounts and pass the exact alias as the required account argument.
+Before using GitHub tools, call list_github_accounts, then call select_github_account with the exact alias. The selection is stored for the authenticated MCP session and isolated from other sessions. Streamable HTTP clients receive an Mcp-Session-Id during initialize and must send it on subsequent requests. Passing account explicitly remains supported for one-off calls.

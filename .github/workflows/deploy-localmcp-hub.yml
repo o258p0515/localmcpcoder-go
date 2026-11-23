@@ -94,8 +94,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf 'HUB_ENDPOINT_B64='
-          printf '%s' "$HUB_DOMAIN" | base64 -w0
+          printf 'HUB_ENDPOINT_ASCII='
+          printf '%s' "$HUB_DOMAIN" | od -An -tu1 -v | xargs | tr ' ' ','
           printf '\\n'
       - name: Smoke test Hub endpoints
         env:

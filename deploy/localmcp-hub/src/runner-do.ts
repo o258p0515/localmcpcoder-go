@@ -52,8 +52,18 @@ export class RunnerDO {
       os: url.searchParams.get("os") ?? "unknown",
       arch: url.searchParams.get("arch") ?? "unknown",
       repo: url.searchParams.get("repo") ?? "",
-      tags: (url.searchParams.get("tags") ?? "").split(",").filter(Boolean)
+      tags: (url.searchParams.get("tags") ?? "").split(",").filter(Boolean),
+      connected_at: Date.now()
     };
+    // A reconnect supersedes every still-open socket for this runner ID. Close
+    // the old transport before accepting the new one so dispatch cannot race
+    // onto a stale WebSocket.
+    for (const existing of this.ctx.getWebSockets()) {
+      const oldMeta = (existing as any).deserializeAttachment?.();
+      if (oldMeta?.runner_id === runnerId && existing.readyState < 2) {
+        try { existing.close(1012, "runner reconnected"); } catch { /* already closing */ }
+      }
+    }
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -65,7 +75,7 @@ export class RunnerDO {
   }
 
   private async dispatch(request: Request): Promise<Response> {
-    const sockets = this.ctx.getWebSockets().filter((ws) => ws.readyState === 1);
+    const sockets = this.ctx.getWebSockets().filter((ws) => ws.readyState === 1).sort((a, b) => Number((b as any).deserializeAttachment?.()?.connected_at ?? 0) - Number((a as any).deserializeAttachment?.()?.connected_at ?? 0));
     if (sockets.length === 0) {
       const id = await this.ctx.storage.get<string>("runner_id");
       if (id) await this.registry({ action: "unregister", runner_id: id });

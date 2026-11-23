@@ -48,7 +48,7 @@ function makeRunner() {
   const socket = {
     readyState: 1,
     send: vi.fn(),
-    deserializeAttachment: () => ({ runner_id: "runner-1" })
+    deserializeAttachment: () => ({ runner_id: "runner-1", connected_at: 1 })
   };
   const state = {
     storage: {
@@ -101,5 +101,31 @@ describe("RunnerDO disconnect handling", () => {
     const job = await jobResponse.json() as any;
     expect(job.status).toBe("failed");
     expect(job.result.error.message).toContain("disconnected");
+  });
+  it("routes overlapping reconnect sockets to the newest and ignores the old socket close", async () => {
+    const sql = new FakeSQL();
+    const oldSocket = { readyState: 1, send: vi.fn(), deserializeAttachment: () => ({ runner_id: "runner-1", connected_at: 1 }) };
+    const newSocket = { readyState: 1, send: vi.fn(), deserializeAttachment: () => ({ runner_id: "runner-1", connected_at: 2 }) };
+    const values = new Map<string, unknown>([["runner_id", "runner-1"]]);
+    const registryCalls: any[] = [];
+    const state = {
+      storage: { sql, get: async (k: string) => values.get(k), put: async (k: string, v: unknown) => { values.set(k, v); } },
+      getWebSockets: () => [oldSocket, newSocket],
+      acceptWebSocket: vi.fn()
+    };
+    const env = { REGISTRY_DO: { idFromName: () => "global", get: () => ({ fetch: async (_: any, init: any) => {
+      registryCalls.push(JSON.parse(String(init.body))); return Response.json({ result: true });
+    } }) } } as unknown as Env;
+    const runner = new RunnerDO(state as any, env);
+    const response = await runner.fetch(new Request("https://runner/dispatch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: { jsonrpc: "2.0", id: 1, method: "tools/call" }, async: true })
+    }));
+    expect(response.status).toBe(200);
+    expect(newSocket.send).toHaveBeenCalledOnce();
+    expect(oldSocket.send).not.toHaveBeenCalled();
+    oldSocket.readyState = 3;
+    await runner.webSocketClose(oldSocket as any);
+    expect(registryCalls.some((call) => call.action === "unregister")).toBe(false);
   });
 });

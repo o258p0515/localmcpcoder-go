@@ -1,0 +1,20 @@
+{
+  "name": "localmcp-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "__ACCOUNT_ID__",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "__HUB_DOMAIN__/*", "zone_name": "__ZONE_NAME__" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "REGISTRY_DO", "class_name": "RegistryDO" },
+      { "name": "RUNNER_DO", "class_name": "RunnerDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RegistryDO", "RunnerDO"] }
+  ]
+}

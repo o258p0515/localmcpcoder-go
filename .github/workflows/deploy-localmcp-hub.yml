@@ -1,0 +1,134 @@
+name: Deploy LocalMCP Hub
+on:
+  push:
+    branches: [feat/localmcp-hub]
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: Start two local Go runners and run routing/concurrency/async/drain E2E checks
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: localmcp-hub-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: deploy/localmcp-hub
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: go/go.mod
+      - name: Validate existing credentials
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in CF_API_EMAIL CF_API_KEY CF_DOMAIN MCP_TOKEN; do
+            if [ -z "${!name:-}" ]; then echo "::error title=Missing secret::$name is required"; exit 1; fi
+          done
+      - name: Install Worker dependencies
+        run: npm install --no-audit --no-fund
+      - name: Validate E2E script syntax
+        run: node --check scripts/e2e-smoke.mjs
+      - name: Typecheck Worker
+        run: npm run typecheck
+      - name: Test Worker
+        run: npm test
+      - name: Test Go runner
+        working-directory: go
+        run: |
+          set -euo pipefail
+          go mod tidy
+          go test ./...
+          go vet ./...
+          go build ./cmd/mcp
+      - name: Resolve zone, prepare DNS and derive deployment secrets
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: node scripts/prepare-deploy.mjs
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CF_API_KEY }}
+        run: npx wrangler deploy --config wrangler.deploy.jsonc
+      - name: Set runtime secrets (derived values are not persisted in GitHub)
+        env:
+          CLOUDFLARE_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CF_API_KEY }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MCP_TOKEN" | npx wrangler secret put MCP_TOKEN --config wrangler.deploy.jsonc
+          printf '%s' "$HUB_SHARED_SECRET" | npx wrangler secret put HUB_SHARED_SECRET --config wrangler.deploy.jsonc
+          printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN --config wrangler.deploy.jsonc
+      - name: Smoke test Hub endpoints
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error "https://$HUB_DOMAIN/health" > /tmp/hub-health.json; then break; fi
+            sleep 5
+          done
+          cat /tmp/hub-health.json
+          grep -q '"status":"ok"' /tmp/hub-health.json
+          UNAUTH=$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST "https://$HUB_DOMAIN/mcp" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+          test "$UNAUTH" = "401"
+          INIT=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"hub-smoke","version":"1"}}}')
+          echo "$INIT" | grep -q 'localmcp-hub'
+          TOOLS=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')
+          echo "$TOOLS" | grep -q 'list_runners'
+          ADMIN=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN")
+          echo "Admin runner registry: $ADMIN"
+          echo "Hub endpoint smoke tests passed: https://$HUB_DOMAIN/mcp"
+      - name: Multi-runner end-to-end test (two local Go processes)
+        if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hub-runner-a" "$RUNNER_TEMP/hub-runner-b"
+          (cd ../../go && go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp)
+          "$RUNNER_TEMP/localmcpcoder-mcp" --root "$RUNNER_TEMP/hub-runner-a" --port 18787 --tunnel hub --hub-urls "https://$HUB_DOMAIN" --hub-secret "$HUB_SHARED_SECRET" --runner-id "e2e-a-$GITHUB_RUN_ID" --runner-tags "linux,go,e2e" > "$RUNNER_TEMP/hub-runner-a.log" 2>&1 &
+          PID_A=$!
+          "$RUNNER_TEMP/localmcpcoder-mcp" --root "$RUNNER_TEMP/hub-runner-b" --port 18788 --tunnel hub --hub-urls "https://$HUB_DOMAIN" --hub-secret "$HUB_SHARED_SECRET" --runner-id "e2e-b-$GITHUB_RUN_ID" --runner-tags "linux,go,e2e" > "$RUNNER_TEMP/hub-runner-b.log" 2>&1 &
+          PID_B=$!
+          cleanup() {
+            kill -TERM "$PID_A" "$PID_B" 2>/dev/null || true
+            wait "$PID_A" 2>/dev/null || true
+            wait "$PID_B" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          if ! RUNNER_A="e2e-a-$GITHUB_RUN_ID" RUNNER_B="e2e-b-$GITHUB_RUN_ID" RUNNER_A_PID="$PID_A" RUNNER_B_PID="$PID_B" node scripts/e2e-smoke.mjs; then
+            echo "::group::Runner A log"
+            cat "$RUNNER_TEMP/hub-runner-a.log"
+            echo "::endgroup::"
+            echo "::group::Runner B log"
+            cat "$RUNNER_TEMP/hub-runner-b.log"
+            echo "::endgroup::"
+            exit 1
+          fi

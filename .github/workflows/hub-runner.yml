@@ -1,5 +1,7 @@
 name: LocalMCP Hub Runner
 on:
+  push:
+    branches: [feat/localmcp-hub]
   workflow_dispatch:
     inputs:
       runner_name:
@@ -24,6 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   runner:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:

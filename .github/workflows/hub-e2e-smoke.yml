@@ -1,5 +1,7 @@
 name: LocalMCP Hub Multi-Runner E2E
 on:
+  push:
+    branches: [feat/localmcp-hub]
   workflow_dispatch:
     inputs:
       runner_a_id:
@@ -26,6 +28,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   e2e:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

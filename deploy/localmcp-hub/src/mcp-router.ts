@@ -27,7 +27,7 @@ async function runnerRequest(env: Env, id: string, path: string, body?: unknown)
   });
   const data = await response.json() as any;
   if (!response.ok) throw new Error(data.error ?? "runner request failed");
-  return data.result ?? data;
+  return path.startsWith("job?") ? data : (data.result ?? data);
 }
 
 function metaTools() {

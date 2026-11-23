@@ -28,6 +28,7 @@ function fakeEnv() {
       if (body.payload?.method === "tools/list") {
         return Response.json({ result: { jsonrpc: "2.0", id: "hub-tools-list", result: { tools: [{ name: "bash", description: "shell", inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } }] } } });
       }
+      if (String(_input).includes("/job?")) return Response.json({ job_id: "job-1", tool_name: "bash", status: "completed", result: { jsonrpc: "2.0", id: "rpc-1", result: { content: [{ type: "text", text: "async ok" }] } }, created_at: 1, finished_at: 2 });
       if (body.async) return Response.json({ result: { status: "running", job_id: "job-1", runner_id: "r1" } });
       return Response.json({ result: { jsonrpc: "2.0", id: "rpc-1", result: { content: [{ type: "text", text: "ok" }] } } });
     }
@@ -62,6 +63,14 @@ describe("MCP Hub routing", () => {
     const bash = body.result.tools.find((tool: any) => tool.name === "bash");
     expect(bash.inputSchema.properties.runner_id.type).toBe("string");
     expect(bash.inputSchema.properties.async.type).toBe("boolean");
+  });
+  it("returns the full async job status and result without unwrapping its result field", async () => {
+    const { env } = fakeEnv();
+    const response = await handleMcp(request({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "get_job_result", arguments: { runner_id: "r1", job_id: "job-1" } } }), env, "session-1");
+    const body = await response.json() as any;
+    const job = JSON.parse(body.result.content[0].text);
+    expect(job.status).toBe("completed");
+    expect(job.result.result.content[0].text).toBe("async ok");
   });
   it("strips Hub-only arguments before forwarding and supports async jobs", async () => {
     const { env, runnerCalls } = fakeEnv();

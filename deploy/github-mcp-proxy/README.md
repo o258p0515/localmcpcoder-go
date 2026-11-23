@@ -1,5 +1,7 @@
 # Multi-Account GitHub MCP Proxy
 
+> **Deployment safety:** This is a standalone proxy copy and does not include the LocalMCP lifecycle tools. Its deployment workflow is manual-only and requires explicit confirmation because it targets the shared MCP hostname. The production proxy with LocalMCP tools is managed from `o258p0515/cf-worker-proxy-mcp`.
+
 A Cloudflare Worker that proxies the official GitHub Remote MCP endpoint and selects a GitHub PAT from Firebase Realtime Database for each tool call. It supports Streamable HTTP (/mcp), legacy SSE (/sse and /messages), static token authentication, OAuth 2.1 authorization-code + PKCE, dynamic client registration, and encrypted RTDB caching.
 
 ## Architecture

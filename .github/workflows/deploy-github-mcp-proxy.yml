@@ -1,11 +1,12 @@
 name: Deploy GitHub MCP Proxy
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'deploy/github-mcp-proxy/**'
-      - '.github/workflows/deploy-github-mcp-proxy.yml'
   workflow_dispatch:
+    inputs:
+      confirm_shared_endpoint_overwrite:
+        description: "Confirm that this standalone proxy (without LocalMCP tools) will overwrite the shared production Worker endpoint."
+        type: boolean
+        required: true
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -13,6 +14,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   deploy:
+    if: inputs.confirm_shared_endpoint_overwrite == true
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:

@@ -331,22 +331,13 @@ jobs:
           CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
-          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
-          GIT_EXECUTOR_TOKEN: ${{ secrets.GIT_EXECUTOR_TOKEN }}
-          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
-          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
-          RTDB_URL: ${{ secrets.RTDB_URL }}
-          RTDB_AUTH_URL: ${{ secrets.RTDB_AUTH_URL }}
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          FIREBASE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON_B64 }}
         run: |
           set -euo pipefail
           git clone --depth 1 --branch feature/issue-68-azure-devops-runner https://github.com/o258p0515/cf-worker-proxy-mcp.git proxy-e2e
           cd proxy-e2e
           npm ci
           node scripts/prepare-preview.mjs
-          npx --yes wrangler@3 deploy --config wrangler.preview.jsonc
-          node scripts/sync-secrets.mjs | npx --yes wrangler@3 secret bulk --config wrangler.preview.jsonc
+          node scripts/deploy-worker-content.mjs wrangler.preview.jsonc
       - name: Live Azure DevOps runner E2E against Issue 68 preview
         if: ${{ inputs.run_preview_e2e }}
         env:

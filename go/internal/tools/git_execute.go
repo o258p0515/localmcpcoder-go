@@ -188,6 +188,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	}
 
 	cmd := exec.CommandContext(cctx, "git", args...)
+	cmd.Dir = root
 	cmd.Env = gitSafeEnv(os.Environ())
 	if needsCredential {
 		askpass, clean, e := writeAskpass(credential)
@@ -227,6 +228,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	if op == "commit" {
 		commitArgs := append(gitBaseArgs(hooksDir), "--git-dir="+gitDir, "--work-tree="+repoPath, "commit", "-m", message)
 		commitCmd := exec.CommandContext(cctx, "git", commitArgs...)
+		commitCmd.Dir = repoPath
 		commitCmd.Env = append(gitSafeEnv(os.Environ()), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 		commitOutput, commitErr := runGitCommand(commitCmd, r.D.MaxOutput)
 		output = strings.TrimSpace(output + "\n" + commitOutput)
@@ -280,6 +282,7 @@ func runSimpleGit(ctx context.Context, gitDir, workTree, hooksDir string, args .
 	}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	if workTree != "" { cmd.Dir = workTree } else { cmd.Dir = filepath.Dir(gitDir) }
 	cmd.Env = append(gitSafeEnv(os.Environ()), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 	return runGitCommand(cmd, 64*1024)
 }
@@ -374,7 +377,7 @@ func gitSafeEnv(in []string) []string {
 			continue
 		}
 		switch k {
-		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "GIT_EXECUTOR_TOKEN", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
+		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "GIT_EXECUTOR_TOKEN", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "PWD", "OLDPWD":
 			continue
 		}
 		out = append(out, v)
@@ -418,6 +421,7 @@ func validGitHubRemote(gitDir, workTree string, checkPush bool) bool {
 	}
 	args = append(args, "origin")
 	cmd := exec.Command("git", args...)
+	cmd.Dir = workTree
 	cmd.Env = append(gitSafeEnv(os.Environ()), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 	remote, err := cmd.Output()
 	return err == nil && githubRepoRE.MatchString(strings.TrimSpace(string(remote)))
@@ -431,5 +435,7 @@ func validBranchRef(ref string) bool {
 			return false
 		}
 	}
-	return exec.Command("git", "check-ref-format", "--branch", ref).Run() == nil
+	cmd := exec.Command("git", "check-ref-format", "--branch", ref)
+	cmd.Dir = os.TempDir()
+	return cmd.Run() == nil
 }

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -191,12 +192,12 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	cmd.Dir = root
 	cmd.Env = gitSafeEnv(os.Environ())
 	if needsCredential {
-		askpass, clean, e := writeAskpass(credential)
+		askpass, clean, e := writeAskpass()
 		if e != nil {
 			return fail("cannot prepare temporary Git credential helper")
 		}
 		defer clean()
-		cmd.Env = append(cmd.Env, "GIT_ASKPASS="+askpass, "GIT_TERMINAL_PROMPT=0")
+		cmd.Env = append(cmd.Env, "GIT_ASKPASS="+askpass, "GIT_TERMINAL_PROMPT=0", "LOCALMCP_GIT_USERNAME="+credential.Username, "LOCALMCP_GIT_CREDENTIAL="+credential.Credential)
 	}
 	cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 	output, runErr := runGitCommand(cmd, r.D.MaxOutput)
@@ -205,7 +206,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		return fail("Git operation timed out")
 	}
 	if runErr != nil {
-		return gitCommandFailure(runErr, output)
+		return gitCommandFailure(runErr, output, credential.Credential)
 	}
 
 	if op == "clone" {
@@ -236,7 +237,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		commitOutput, commitErr := runGitCommand(commitCmd, r.D.MaxOutput)
 		output = strings.TrimSpace(output + "\n" + commitOutput)
 		if commitErr != nil {
-			return gitCommandFailure(commitErr, output)
+			return gitCommandFailure(commitErr, output, "")
 		}
 	}
 	if output == "" {
@@ -319,15 +320,30 @@ func redactCredential(output, credential string) string {
 	if credential == "" {
 		return output
 	}
-	return strings.ReplaceAll(output, credential, "[REDACTED]")
+	variants := []string{
+		credential,
+		url.QueryEscape(credential),
+		url.PathEscape(credential),
+		base64.StdEncoding.EncodeToString([]byte(credential)),
+		base64.RawStdEncoding.EncodeToString([]byte(credential)),
+		base64.URLEncoding.EncodeToString([]byte(credential)),
+		base64.RawURLEncoding.EncodeToString([]byte(credential)),
+	}
+	for _, variant := range variants {
+		if variant != "" {
+			output = strings.ReplaceAll(output, variant, "[REDACTED]")
+		}
+	}
+	return output
 }
 
-func gitCommandFailure(err error, output string) Result {
+func gitCommandFailure(err error, output, credential string) Result {
+	output = redactCredential(output, credential)
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		return fail(fmt.Sprintf("Git operation failed (exit %d): %s", exit.ExitCode(), output))
 	}
-	return fail("Git operation failed: " + err.Error())
+	return fail("Git operation failed: " + redactCredential(err.Error(), credential))
 }
 
 func (r *Registry) fetchGitCredential(ctx context.Context, account, operation string) (gitCredential, error) {
@@ -355,46 +371,47 @@ func (r *Registry) fetchGitCredential(ctx context.Context, account, operation st
 	return cred, nil
 }
 
-func writeAskpass(c gitCredential) (string, func(), error) {
-	dir, e := os.MkdirTemp("", "localmcp-git-auth-")
-	if e != nil {
-		return "", nil, e
-	}
-	if e = os.Chmod(dir, 0700); e != nil {
-		_ = os.RemoveAll(dir)
-		return "", nil, e
-	}
-	secret := filepath.Join(dir, "credential")
-	payload := c.Username + "\n" + c.Credential + "\n"
-	if e = os.WriteFile(secret, []byte(payload), 0600); e != nil {
-		_ = os.RemoveAll(dir)
-		return "", nil, e
-	}
-	script := filepath.Join(dir, "askpass")
-	body := "#!/bin/sh\ncase \"$1\" in *Username*) sed -n '1p' \"" + secret + "\" ;; *) sed -n '2p' \"" + secret + "\" ;; esac\n"
+func writeAskpass() (string, func(), error) {
 	if runtime.GOOS == "windows" {
-		_ = os.RemoveAll(dir)
 		return "", nil, errors.New("secure askpass helper is not supported on Windows")
 	}
-	if e = os.WriteFile(script, []byte(body), 0700); e != nil {
+	dir, err := os.MkdirTemp("", "localmcp-git-auth-")
+	if err != nil {
+		return "", nil, err
+	}
+	if err = os.Chmod(dir, 0700); err != nil {
 		_ = os.RemoveAll(dir)
-		return "", nil, e
+		return "", nil, err
+	}
+	// The helper contains no secret. The credential is passed only in the
+	// isolated Git subprocess environment and never written to the filesystem.
+	script := filepath.Join(dir, "askpass")
+	body := "#!/bin/sh\ncase \"$1\" in *Username*) printf '%s\\n' \"$LOCALMCP_GIT_USERNAME\" ;; *) printf '%s\\n' \"$LOCALMCP_GIT_CREDENTIAL\" ;; esac\n"
+	if err = os.WriteFile(script, []byte(body), 0700); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", nil, err
 	}
 	return script, func() { _ = os.RemoveAll(dir) }, nil
 }
 
 func gitSafeEnv(in []string) []string {
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		k := strings.SplitN(v, "=", 2)[0]
-		if strings.HasPrefix(k, "GIT_") {
+	// Use an explicit allowlist: this also removes lowercase proxy variables,
+	// cloud credentials, runtime secrets, and unknown agent/runner environment.
+	allowed := map[string]struct{}{
+		"PATH": {}, "HOME": {}, "LANG": {}, "LC_ALL": {}, "LC_CTYPE": {},
+		"TERM": {}, "TMPDIR": {}, "TMP": {}, "TEMP": {},
+		"SYSTEMROOT": {}, "WINDIR": {}, "COMSPEC": {}, "PATHEXT": {},
+		"USERPROFILE": {}, "HOMEDRIVE": {}, "HOMEPATH": {},
+	}
+	out := make([]string, 0, len(allowed))
+	for _, value := range in {
+		key, _, ok := strings.Cut(value, "=")
+		if !ok {
 			continue
 		}
-		switch k {
-		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "GIT_EXECUTOR_TOKEN", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "PWD", "OLDPWD", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME":
-			continue
+		if _, keep := allowed[strings.ToUpper(key)]; keep {
+			out = append(out, value)
 		}
-		out = append(out, v)
 	}
 	return out
 }

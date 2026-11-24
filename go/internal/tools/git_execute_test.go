@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,27 +185,55 @@ func TestGitExecuteRejectsGitMetadataInSharedWorkspace(t *testing.T) {
 }
 
 func TestGitOutputRedactsCredentialOnErrorAndSuccess(t *testing.T) {
-	secret := "github_pat_sensitive_example"
-	got := redactCredential("fatal: remote rejected token="+secret, secret)
+	secret := "ghp_sensitive+token/with=reserved"
+	got := redactCredential("fatal: remote rejected token="+secret+" url="+url.QueryEscape(secret)+" b64="+base64.StdEncoding.EncodeToString([]byte(secret)), secret)
 	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
 		t.Fatalf("credential not redacted: %s", got)
 	}
 }
 
-func TestGitSafeEnvRemovesDedicatedExecutorToken(t *testing.T) {
+func TestGitSafeEnvUsesMinimalAllowlist(t *testing.T) {
 	env := gitSafeEnv([]string{
 		"PATH=/usr/bin",
 		"GIT_EXECUTOR_TOKEN=must-not-reach-git",
 		"MCP_TOKEN=also-private",
 		"HTTP_PROXY=http://proxy.invalid",
+		"http_proxy=http://lower-proxy.invalid",
+		"https_proxy=http://lower-proxy.invalid",
+		"NO_PROXY=localhost",
+		"AWS_SECRET_ACCESS_KEY=must-not-reach-git",
 		"HOME=/home/mcp-git",
+		"LANG=C.UTF-8",
 	})
 	joined := strings.Join(env, "\n")
-	for _, forbidden := range []string{"GIT_EXECUTOR_TOKEN=", "MCP_TOKEN=", "HTTP_PROXY="} {
+	for _, forbidden := range []string{"GIT_EXECUTOR_TOKEN=", "MCP_TOKEN=", "HTTP_PROXY=", "http_proxy=", "https_proxy=", "NO_PROXY=", "AWS_SECRET_ACCESS_KEY="} {
 		if strings.Contains(joined, forbidden) { t.Fatalf("sensitive environment variable leaked: %s", forbidden) }
 	}
 	if !strings.Contains(joined, "PATH=/usr/bin") || !strings.Contains(joined, "HOME=/home/mcp-git") {
 		t.Fatalf("required process environment was removed: %q", joined)
+	}
+}
+
+func TestWriteAskpassDoesNotPersistCredentials(t *testing.T) {
+	script, clean, err := writeAskpass()
+	if err != nil { t.Fatal(err) }
+	dir := filepath.Dir(script)
+	defer clean()
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf("askpass directory must be private: info=%v err=%v", info, err)
+	}
+	if info, err := os.Stat(script); err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf("askpass helper must be private and executable: info=%v err=%v", info, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil { t.Fatal(err) }
+	if len(entries) != 1 || entries[0].Name() != "askpass" {
+		t.Fatalf("askpass directory contains unexpected files: %v", entries)
+	}
+	body, err := os.ReadFile(script)
+	if err != nil { t.Fatal(err) }
+	if strings.Contains(string(body), "credential") || strings.Contains(string(body), "ghp_") {
+		t.Fatalf("askpass helper unexpectedly contains a credential: %q", body)
 	}
 }
 

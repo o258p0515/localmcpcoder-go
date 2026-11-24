@@ -377,7 +377,7 @@ func gitSafeEnv(in []string) []string {
 			continue
 		}
 		switch k {
-		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "GIT_EXECUTOR_TOKEN", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "PWD", "OLDPWD":
+		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "GIT_EXECUTOR_TOKEN", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "PWD", "OLDPWD", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME":
 			continue
 		}
 		out = append(out, v)

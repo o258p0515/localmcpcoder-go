@@ -35,9 +35,9 @@ sudo install -d -o "$(id -un)" -g mcp-workspace -m 2770 "$ROOT"
 printf 'MCP_SHARED_ROOT=%s\\n' "$ROOT" >> "$GITHUB_ENV"
 umask 0002
 checkpoint "start-agent-and-git-mcp-servers"
-sudo --preserve-env=MCP_TOKEN -u mcp-agent "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
+sudo -H --preserve-env=MCP_TOKEN -u mcp-agent "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
-sudo --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
+sudo -H --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
 GIT_PID=$!
 wait_http() {
   local port="$1"
@@ -83,7 +83,7 @@ if ! jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev
   exit 1
 fi
 checkpoint "agent-write-shared-workspace"
-AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'shared-workspace-check\\\\n' > issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
+AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "cd public-shared && printf 'shared-workspace-check\\\\n' > issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
 if ! jq -e '.result.isError != true and .error == null' <<<"$AGENT_WRITE" >/dev/null; then
   echo "Agent shared-workspace write failed; sanitized MCP error follows:" >&2
   jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$AGENT_WRITE" >&2
@@ -99,7 +99,7 @@ if ! jq -r '.result.content[]?.text // empty' <<<"$STATUS" | grep -q 'issue23-sh
   exit 1
 fi
 checkpoint "commit-and-push-dry-run-without-token-exposure"
-PRIVATE_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'private-commit-check\\\\n' > README.md" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{cwd:"private-empty",command:$command}}}')")"
+PRIVATE_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "cd private-empty && printf 'private-commit-check\\\\n' > README.md" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{cwd:"private-empty",command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_WRITE" >/dev/null
 COMMIT="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:9,method:"tools/call",params:{name:"git_execute",arguments:{operation:"commit",account:"personal",path:"private-empty",message:"issue23 private metadata smoke"}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$COMMIT" >/dev/null

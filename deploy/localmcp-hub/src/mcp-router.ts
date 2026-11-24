@@ -56,14 +56,16 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 async function listRunnerTools(env: Env): Promise<any[]> {
   // tools/list is a catalog operation, not a routed tool call: inspect every
   // online runner without requiring a session selection or a unique runner.
+  const baseline = injectRunnerArguments(runnerToolCatalog);
+  const metaNames = new Set(metaTools().map((tool) => tool.name));
   let runners: RunnerInfo[] = [];
   try {
     runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
   } catch {
-    return runnerToolCatalog;
+    return baseline;
   }
   const online = runners.filter((runner) => runner.status === "online");
-  if (online.length === 0) return runnerToolCatalog;
+  if (online.length === 0) return baseline;
 
   const catalogs = await Promise.all(online.map(async (runner) => {
     try {
@@ -84,10 +86,12 @@ async function listRunnerTools(env: Env): Promise<any[]> {
   }));
 
   const merged = new Map<string, any>();
-  for (const tool of runnerToolCatalog) merged.set(tool.name, tool);
+  for (const tool of baseline) merged.set(tool.name, tool);
   for (const tools of catalogs) {
     for (const tool of injectRunnerArguments(tools)) {
-      if (tool && typeof tool.name === "string" && tool.name) merged.set(tool.name, tool);
+      if (tool && typeof tool.name === "string" && tool.name && !metaNames.has(tool.name)) {
+        merged.set(tool.name, tool);
+      }
     }
   }
   return [...merged.values()];
@@ -178,14 +182,14 @@ export async function handleMcp(request: Request, env: Env, session: string): Pr
       start(controller) {
         const encoder = new TextEncoder();
         const keepalive = setInterval(() => {
-          try { controller.enqueue(encoder.encode(": keepalive\\n\\n")); } catch { clearInterval(keepalive); }
+          try { controller.enqueue(encoder.encode(": keepalive\n\n")); } catch { clearInterval(keepalive); }
         }, 20_000);
         void result.then((message) => {
-          if (message !== null) controller.enqueue(encoder.encode("event: message\\ndata: " + JSON.stringify(message) + "\\n\\n"));
+          if (message !== null) controller.enqueue(encoder.encode("event: message\ndata: " + JSON.stringify(message) + "\n\n"));
           clearInterval(keepalive);
           controller.close();
         }).catch((e) => {
-          controller.enqueue(encoder.encode("event: message\\ndata: " + JSON.stringify(error(rpc.id, -32603, String(e))) + "\\n\\n"));
+          controller.enqueue(encoder.encode("event: message\ndata: " + JSON.stringify(error(rpc.id, -32603, String(e))) + "\n\n"));
           clearInterval(keepalive);
           controller.close();
         });

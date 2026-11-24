@@ -55,7 +55,7 @@ async function listed(env: Env) {
 }
 
 describe("MCP Hub routing", () => {
-  it("exposes all 16 baseline tools when no runner is online", async () => {
+  it("exposes all 16 baseline tools with runner_id and async when no runner is online", async () => {
     const { env } = fakeEnv({ runners: [] });
     const tools = await listed(env);
     expect(tools).toHaveLength(16);
@@ -63,6 +63,10 @@ describe("MCP Hub routing", () => {
       "list_runners", "select_runner", "get_job_result", "bash", "read_file", "write_file", "edit_file",
       "list_dir", "glob", "grep", "todo_write", "todo_read", "system_info", "skills_list", "skill_read", "skills_reload"
     ]);
+    for (const tool of tools.slice(3)) {
+      expect(tool.inputSchema.properties.runner_id.type).toBe("string");
+      expect(tool.inputSchema.properties.async.type).toBe("boolean");
+    }
   });
 
   it("exposes the complete catalog without selecting a runner", async () => {
@@ -72,20 +76,25 @@ describe("MCP Hub routing", () => {
     expect(tools.find((tool) => tool.name === "read_file").inputSchema.required).toEqual(["file_path"]);
   });
 
-  it("merges additional tools from every online runner when multiple runners exist", async () => {
+  it("merges additional tools from every online runner without duplicating meta tools", async () => {
     const { env, runnerCalls } = fakeEnv({
       runners: [
         { runner_id: "r1", status: "online" },
         { runner_id: "r2", status: "online" }
       ],
       toolsByRunner: {
-        r1: [{ name: "bash", description: "shell", inputSchema: { type: "object", properties: { command: { type: "string" } } } }, { name: "custom_one", inputSchema: { type: "object", properties: {} } }],
+        r1: [
+          { name: "list_runners", description: "duplicate meta", inputSchema: { type: "object", properties: {} } },
+          { name: "bash", description: "shell", inputSchema: { type: "object", properties: { command: { type: "string" } } } },
+          { name: "custom_one", inputSchema: { type: "object", properties: {} } }
+        ],
         r2: [{ name: "custom_two", inputSchema: { type: "object", properties: {} } }]
       }
     });
     const tools = await listed(env);
     expect(tools.map((tool) => tool.name)).toContain("custom_one");
     expect(tools.map((tool) => tool.name)).toContain("custom_two");
+    expect(tools.filter((tool) => tool.name === "list_runners")).toHaveLength(1);
     expect(runnerCalls.filter((call) => call.body.payload?.method === "tools/list")).toHaveLength(2);
   });
 
@@ -94,6 +103,20 @@ describe("MCP Hub routing", () => {
     const tools = await listed(env);
     expect(tools).toHaveLength(16);
     expect(tools.map((tool) => tool.name)).toContain("skills_reload");
+    expect(tools.find((tool) => tool.name === "skills_reload").inputSchema.properties.runner_id.type).toBe("string");
+  });
+
+  it("formats SSE responses with real newlines", async () => {
+    const { env } = fakeEnv({ runners: [] });
+    const response = await handleMcp(
+      request({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "session-1", { Accept: "text/event-stream" }),
+      env,
+      "session-1"
+    );
+    const text = await response.text();
+    expect(text).toContain("event: message\ndata: ");
+    expect(text.endsWith("\n\n")).toBe(true);
+    expect(text).not.toContain("\\ndata:");
   });
 
   it("pins a session and injects runner routing arguments into remote tool schemas", async () => {

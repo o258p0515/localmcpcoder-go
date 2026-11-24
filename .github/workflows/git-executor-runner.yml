@@ -55,7 +55,7 @@ jobs:
           go test -race ./...
           go vet ./...
           go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-git-executor" ./cmd/mcp
-      - name: Verify OIDC credential flow and paired-runner isolation
+      - name: Verify dedicated Git executor token and paired-runner isolation
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
@@ -66,6 +66,7 @@ jobs:
           HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
+          GIT_EXECUTOR_TOKEN: ${{ secrets.GIT_EXECUTOR_TOKEN }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
           RUNNER_NAME_PREFIX: ${{ inputs.runner_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}

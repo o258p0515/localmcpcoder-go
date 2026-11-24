@@ -94,7 +94,7 @@ jobs:
             "$BIN" --root "$ROOT" --port 8787 --tunnel hub \
             --hub-urls "$HUB_URLS" --runner-id "$AGENT_ID" --runner-tags "linux,agent,issue23" &
           AGENT_PID=$!
-          sudo --preserve-env=MCP_TOKEN,HUB_URLS,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN,MCP_TOOL_PROFILE -u mcp-git timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
+          sudo --preserve-env=MCP_TOKEN,HUB_URLS,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
             "$BIN" --root "$ROOT" --port 8788 --tunnel hub \
             --hub-urls "$HUB_URLS" --runner-id "$GIT_ID" --runner-tags "linux,git,isolated" \
             --tool-profile git-executor &

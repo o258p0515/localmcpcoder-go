@@ -447,7 +447,7 @@ func validatedCommitPathspecs(repoRoot string, paths []string) ([]string, error)
 		if path == "" || filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") {
 			return nil, errors.New("commit paths must be safe relative paths")
 		}
-		for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\\\' }) {
+		for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
 			if part == ".." { return nil, errors.New("commit path traversal is not allowed") }
 		}
 		clean := filepath.Clean(path)

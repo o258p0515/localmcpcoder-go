@@ -1,0 +1,84 @@
+name: LocalMCP Git Executor Runner
+on:
+  workflow_dispatch:
+    inputs:
+      runner_name:
+        description: Unique isolated Git executor runner name
+        type: string
+        required: false
+        default: git-executor
+      duration_seconds:
+        description: Runner lifetime in seconds (maximum 20400 / 5h40m)
+        type: number
+        required: true
+        default: 20400
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: localmcp-git-executor-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  git-executor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: go/go.mod
+      - name: Validate isolated executor configuration
+        env:
+          HUB_URLS: ${{ secrets.HUB_URLS }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          GIT_CREDENTIAL_URL: ${{ vars.GIT_CREDENTIAL_URL }}
+          DURATION_SECONDS: ${{ inputs.duration_seconds }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in HUB_URLS MCP_TOKEN GIT_CREDENTIAL_URL; do
+            if [ -z "${!name:-}" ]; then echo "::error title=Missing configuration::$name is required"; exit 1; fi
+          done
+          if ! [[ "$GIT_CREDENTIAL_URL" =~ ^https://[^/]+/internal/runner/git-credential$ ]]; then
+            echo "::error title=Invalid credential endpoint::GIT_CREDENTIAL_URL must be the HTTPS internal credential route"; exit 1
+          fi
+          if ! [[ "$DURATION_SECONDS" =~ ^[0-9]+$ ]] || [ "$DURATION_SECONDS" -lt 60 ] || [ "$DURATION_SECONDS" -gt 20400 ]; then
+            echo "::error title=Invalid duration::duration_seconds must be between 60 and 20400"; exit 1
+          fi
+      - name: Build and test isolated Git executor
+        working-directory: go
+        run: |
+          set -euo pipefail
+          go test ./...
+          go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-git-executor" ./cmd/mcp
+      - name: Start Git-only outbound Hub runner
+        env:
+          HUB_URLS: ${{ secrets.HUB_URLS }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          GIT_CREDENTIAL_URL: ${{ vars.GIT_CREDENTIAL_URL }}
+          MCP_TOOL_PROFILE: git-executor
+          LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name }}
+          LOCALMCP_RUNNER_TAGS: linux,git,isolated
+          DURATION_SECONDS: ${{ inputs.duration_seconds }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/git-executor-root"
+          mkdir -p "$ROOT"
+          chmod 700 "$ROOT"
+          RUNNER_ID="${LOCALMCP_RUNNER_NAME:-git-executor}-${GITHUB_RUN_ID}"
+          echo "Starting isolated Git-only runner $RUNNER_ID; no shell/file tools are registered."
+          set +e
+          timeout --signal=TERM --kill-after=40s "${DURATION_SECONDS}s" \
+            "$RUNNER_TEMP/localmcpcoder-git-executor" --root "$ROOT" --tunnel hub \
+            --hub-urls "$HUB_URLS" --runner-id "$RUNNER_ID" --runner-tags "$LOCALMCP_RUNNER_TAGS" \
+            --tool-profile git-executor
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 124 ] || [ "$STATUS" -eq 143 ]; then exit 0; fi
+          exit "$STATUS"

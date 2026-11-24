@@ -31,16 +31,16 @@ jobs:
     steps:
       - name: Validate Hub runner inputs
         env:
-          RUNNER_NAME: ${{ inputs.runner_name }}
+          DISPATCH_RUNNER_NAME: ${{ inputs.runner_name }}
           RUNNER_TAGS: ${{ inputs.runner_tags }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
         shell: bash
         run: |
           set -euo pipefail
-          RUNNER_NAME="${RUNNER_NAME:-public-mcp}"
+          DISPATCH_RUNNER_NAME="${DISPATCH_RUNNER_NAME:-public-mcp}"
           RUNNER_TAGS="${RUNNER_TAGS:-linux,go,gha,public}"
           DURATION_SECONDS="${DURATION_SECONDS:-20400}"
-          if [ -z "$RUNNER_NAME" ] || [ "${#RUNNER_NAME}" -gt 64 ] || [[ "$RUNNER_NAME" == *$'\\n'* || "$RUNNER_NAME" == *$'\\r'* ]]; then
+          if [ -z "$DISPATCH_RUNNER_NAME" ] || [ "${#DISPATCH_RUNNER_NAME}" -gt 64 ] || [[ "$DISPATCH_RUNNER_NAME" == *$'\\n'* || "$DISPATCH_RUNNER_NAME" == *$'\\r'* ]]; then
             echo "::error title=Invalid runner name::Runner name must be 1-64 characters and contain no line breaks."
             exit 1
           fi
@@ -58,25 +58,25 @@ jobs:
             echo "::error title=Invalid duration::duration_seconds must be between 60 and 20400."
             exit 1
           fi
-          echo "Validated Hub runner dispatch: name=$RUNNER_NAME tags=$RUNNER_TAGS duration=$DURATION_SECONDS."
+          echo "Validated Hub runner dispatch: name=$DISPATCH_RUNNER_NAME tags=$RUNNER_TAGS duration=$DURATION_SECONDS."
 
       - name: Dispatch Hub-only runner workflow
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RUNNER_NAME: ${{ inputs.runner_name }}
+          DISPATCH_RUNNER_NAME: ${{ inputs.runner_name }}
           RUNNER_TAGS: ${{ inputs.runner_tags }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
         shell: bash
         run: |
           set -euo pipefail
-          RUNNER_NAME="${RUNNER_NAME:-public-mcp}"
+          DISPATCH_RUNNER_NAME="${DISPATCH_RUNNER_NAME:-public-mcp}"
           RUNNER_TAGS="${RUNNER_TAGS:-linux,go,gha,public}"
           DURATION_SECONDS="${DURATION_SECONDS:-20400}"
-          echo "Dispatching Hub runner '$RUNNER_NAME'; no Cloudflare Tunnel or DNS operations are performed."
+          echo "Dispatching Hub runner '$DISPATCH_RUNNER_NAME'; no Cloudflare Tunnel or DNS operations are performed."
           gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/hub-runner.yml/dispatches" \
             -f ref=main \
-            -f "inputs[runner_name]=$RUNNER_NAME" \
+            -f "inputs[runner_name]=$DISPATCH_RUNNER_NAME" \
             -f "inputs[runner_tags]=$RUNNER_TAGS" \
             -f "inputs[duration_seconds]=$DURATION_SECONDS"
           echo "Hub runner workflow dispatched successfully."

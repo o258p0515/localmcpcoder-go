@@ -82,6 +82,13 @@ jobs:
           else:
             for x in ("A2","A3","A4","B1","C1","C2","D1","D2","D3","E1"): print(json.dumps({"probe":x,"result":"BLOCKED_NO_PROJECT"}))
           get("A5","/_apis/distributedtask/pools")
+          # Safe negative-auth test with a synthetic invalid credential, never the real PAT.
+          bad_auth=base64.b64encode(b":issue69-invalid-pat").decode()
+          bad_req=urllib.request.Request(org+"/_apis/projects?api-version=7.1",headers={"Authorization":"Basic "+bad_auth,"Accept":"application/json"})
+          try:
+            with urllib.request.urlopen(bad_req,timeout=20) as bad_resp: bad_status=bad_resp.status; bad_ct=bad_resp.headers.get("Content-Type",""); bad_raw=bad_resp.read(200)
+          except urllib.error.HTTPError as bad_err: bad_status=bad_err.code; bad_ct=bad_err.headers.get("Content-Type",""); bad_raw=bad_err.read(200)
+          print(json.dumps({"probe":"E2-invalid-pat","http_status":bad_status,"content_type":bad_ct,"is_html":"html" in bad_ct.lower() or b"<html" in bad_raw.lower(),"result":"BLOCKED_AUTH_REDIRECT" if bad_status==203 or "html" in bad_ct.lower() else ("BLOCKED_AUTH" if bad_status in (401,403) else "UNEXPECTED")}))
           # End-to-end bootstrap: create an isolated Azure Repo branch + temporary YAML pipeline.
           if os.environ.get("ALLOW_MUTATING_PROBES","false").lower()=="true" and ps:
             import time, uuid
@@ -99,8 +106,9 @@ jobs:
               file_path="/.azure-pipelines/issue69-probe.yml"
               yaml_files={
                 "/.azure-pipelines/issue69-linux.yml": "\n".join(["pool:","  vmImage: ubuntu-latest","steps:","- bash: |","    echo 'ISSUE69_LINUX_START'","    echo 'ISSUE69_LOG_MARKER_001'","    echo 'ISSUE69_LOG_MARKER_002'","    echo 'ISSUE69_LINUX_END'","  displayName: Issue 69 Linux probe"])+"\n",
-                "/.azure-pipelines/issue69-live.yml": "\n".join(["pool:","  vmImage: ubuntu-latest","steps:","- bash: |","    echo 'ISSUE69_LIVE_START'","    echo 'ISSUE69_LIVE_LOG_MARKER_001'","    sleep 150","    echo 'ISSUE69_LIVE_END'","  displayName: Issue 69 live log and cancellation probe"])+"\n",
-                "/.azure-pipelines/issue69-windows.yml": "\n".join(["pool:","  vmImage: windows-latest","steps:","- powershell: |","    Write-Host 'ISSUE69_WINDOWS_START'","    Write-Host 'ISSUE69_WINDOWS_LOG_MARKER_001'","    Write-Host 'ISSUE69_WINDOWS_END'","  displayName: Issue 69 Windows probe"])+"\n"
+                "/.azure-pipelines/issue69-live.yml": "\n".join(["pool:","  vmImage: ubuntu-latest","steps:","- checkout: none","- bash: |","    echo 'ISSUE69_LIVE_START'","    echo 'ISSUE69_LIVE_LOG_MARKER_001'","    sleep 150","    echo 'ISSUE69_LIVE_END'","  displayName: Issue 69 live log and cancellation probe"])+"\n",
+                "/.azure-pipelines/issue69-windows.yml": "\n".join(["pool:","  vmImage: windows-latest","steps:","- powershell: |","    Write-Host 'ISSUE69_WINDOWS_START'","    Write-Host 'ISSUE69_WINDOWS_LOG_MARKER_001'","    Write-Host 'ISSUE69_WINDOWS_END'","  displayName: Issue 69 Windows probe"])+"\n",
+                "/.azure-pipelines/issue69-parameters.yml": "\n".join(["parameters:","- name: runner_id","  type: string","  default: probe","- name: tags","  type: object","  default: []","- name: duration","  type: number","  default: 0","pool:","  vmImage: ubuntu-latest","steps:","- checkout: none","- bash: |","    echo 'runner_id="+chr(36)+"{{ parameters.runner_id }}'","    echo 'tags="+chr(36)+"{{ join(parameters.tags, ',') }}'","    echo 'duration="+chr(36)+"{{ parameters.duration }}'","    sleep "+chr(36)+"{{ parameters.duration }}","  displayName: Issue 69 template parameter probe"])+"\n"
               }
               pipeline_defs=[]
               branch_created=False
@@ -179,7 +187,7 @@ jobs:
                     if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"):
                       pipeline_defs.append({"id":pipe["id"],"name":pname_def,"path":path})
                       api("A4-pipeline-detail-"+str(pipe["id"]),"GET",f"/{pname}/_apis/pipelines/{pipe['id']}")
-                  def queue_and_poll(label,definition,live=False,windows=False):
+                  def queue_and_poll(label,definition,live=False,windows=False,template_params=None):
                     body={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}
                     code,run=api(label+"-queue","POST",f"/{pname}/_apis/pipelines/{definition['id']}/runs",body)
                     run_id=run.get("id") if isinstance(run,dict) else None
@@ -201,7 +209,7 @@ jobs:
                       lid=task["log"]["id"] if task else (items[-1]["id"] if items else None)
                       if lid:
                         api("D3-"+phase+"-text-page1","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=5",accept="text/plain")
-                        api("D3-"+phase+"-text-page2","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=6&endLine=10",accept="text/plain")
+                        api("D3-"+phase+"-text-page2","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=6&endLine=10",accept="text/plain")\n                        api("D3-"+phase+"-text-page3","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=11&endLine=20",accept="text/plain")
                         api("D3-"+phase+"-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=5",accept="application/json")
                       else: print(json.dumps({"probe":"D3-"+phase,"result":"BLOCKED_NO_STEP_LOG","records_count":len(records),"logs_count":len(items)}))
                     current=None
@@ -224,9 +232,12 @@ jobs:
                   linux=next((x for x in pipeline_defs if "linux.yml" in x["path"]),None)
                   live=next((x for x in pipeline_defs if "live.yml" in x["path"]),None)
                   win=next((x for x in pipeline_defs if "windows.yml" in x["path"]),None)
+                  params=next((x for x in pipeline_defs if "parameters.yml" in x["path"]),None)
                   if linux: queue_and_poll("C3-linux",linux)
                   if live: queue_and_poll("C3-live",live,live=True)
                   if win: queue_and_poll("C3-windows",win,windows=True)
+                  if params:
+                    queue_and_poll("C3-template-parameters",params,template_params={"runner_id":"issue69-runner-probe","tags":["issue69","linux"],"duration":0})
                   # Queue Linux and Windows back-to-back to observe real hosted parallelism/queue behavior.
                   if linux and win:
                     common={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}

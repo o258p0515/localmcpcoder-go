@@ -77,7 +77,11 @@ fi
 test ! -e "$ROOT/private-empty/.git"
 checkpoint "public-clone-and-agent-shared-workspace"
 PUBLIC_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/localmcpcoder-go.git",destination:"public-shared"}}}')")"
-jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev/null
+if ! jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev/null; then
+  echo "Public/shared clone failed; sanitized MCP error follows:" >&2
+  jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$PUBLIC_CLONE" >&2
+  exit 1
+fi
 AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'shared-workspace-check\\\\n' > issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$AGENT_WRITE" >/dev/null
 test ! -e "$ROOT/public-shared/.git"

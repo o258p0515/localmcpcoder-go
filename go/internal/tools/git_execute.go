@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,16 +28,20 @@ type oidcTokenResponse struct {
 	Value string `json:"value"`
 }
 
-var githubRepoRE = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$`)
+var githubRepoRE = regexp.MustCompile("^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?$")
+var accountAliasRE = regexp.MustCompile("^[A-Za-z0-9_.-]{1,64}$")
 
 func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
-	op, account := strings.TrimSpace(val(a, "operation")), strings.TrimSpace(val(a, "account"))
-	if !map[string]bool{"clone": true, "fetch": true, "pull": true, "push": true, "status": true, "branch": true, "log": true}[op] {
+	op := strings.TrimSpace(val(a, "operation"))
+	account := strings.TrimSpace(val(a, "account"))
+	allowed := map[string]bool{"clone": true, "fetch": true, "pull": true, "push": true, "status": true, "branch": true, "log": true, "commit": true}
+	if !allowed[op] {
 		return fail("unsupported Git operation")
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(account) {
+	if !accountAliasRE.MatchString(account) {
 		return fail("a valid account alias is required")
 	}
+
 	root := r.D.Root
 	var repoPath string
 	if op == "clone" {
@@ -48,16 +54,13 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 			return fail("clone destination must be a relative path")
 		}
 		repoPath = filepath.Join(root, filepath.Clean(dest))
-		if !withinRoot(root, repoPath) {
+		if !withinRoot(root, repoPath) || !safeParentPath(root, filepath.Dir(repoPath)) {
 			return fail("destination is outside executor root")
 		}
 		if _, e := os.Lstat(repoPath); e == nil {
 			return fail("destination already exists")
 		} else if !os.IsNotExist(e) {
 			return fail("cannot inspect destination")
-		}
-		if !safeParentPath(root, filepath.Dir(repoPath)) {
-			return fail("destination parent resolves outside executor root")
 		}
 	} else {
 		path := strings.TrimSpace(val(a, "path"))
@@ -68,122 +71,245 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 			return fail("repository path must be relative")
 		}
 		repoPath = filepath.Join(root, filepath.Clean(path))
-		if !withinRoot(root, repoPath) {
+		if !withinRoot(root, repoPath) || !safeExistingPath(root, repoPath) {
 			return fail("repository path is outside executor root")
 		}
-		if fi, e := os.Stat(filepath.Join(repoPath, ".git")); e != nil || (!fi.IsDir() && !fi.Mode().IsRegular()) {
-			return fail("path is not a Git working tree")
+		info, e := os.Lstat(repoPath)
+		if e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fail("path is not a safe working directory")
 		}
-		if !safeExistingPath(root, repoPath) {
-			return fail("repository path resolves outside executor root")
-		}
-		if !validGitHubRemote(repoPath, op == "push") {
-			return fail("origin and push URL must be GitHub HTTPS repository URLs without embedded credentials")
+		if _, e := os.Lstat(filepath.Join(repoPath, ".git")); e == nil {
+			return fail("Git metadata must remain in the private executor store; use git_execute clone")
+		} else if !os.IsNotExist(e) {
+			return fail("cannot inspect workspace Git metadata")
 		}
 	}
-	ref := strings.TrimSpace(val(a, "ref"))
-	if ref != "" && !validBranchRef(ref) {
-		return fail("ref must be a valid branch name")
-	}
+
 	lockValue, _ := r.gitLocks.LoadOrStore(repoPath, &sync.Mutex{})
 	repoLock := lockValue.(*sync.Mutex)
 	repoLock.Lock()
 	defer repoLock.Unlock()
 
+	gitDir, err := privateGitDir(repoPath)
+	if err != nil {
+		return fail("cannot prepare private Git metadata store")
+	}
+	if op != "clone" && !validPrivateGitDir(gitDir) {
+		return fail("no private Git metadata exists for this workspace; clone the repository first")
+	}
+
+	ref := strings.TrimSpace(val(a, "ref"))
+	if ref != "" && !validBranchRef(ref) {
+		return fail("ref must be a valid branch name")
+	}
+	message := strings.TrimSpace(val(a, "message"))
+	if op == "commit" && (message == "" || len(message) > 512 || strings.ContainsRune(message, '\x00')) {
+		return fail("commit requires a message of 1 to 512 characters")
+	}
+	dryRun, _ := a["dry_run"].(bool)
+
 	needsCredential := op == "clone" || op == "fetch" || op == "pull" || op == "push"
 	var credential gitCredential
 	if needsCredential {
-		c, e := r.fetchGitCredential(ctx, account, op)
-		if e != nil {
-			return fail("Git credential provider unavailable: " + e.Error())
+		credential, err = r.fetchGitCredential(ctx, account, op)
+		if err != nil {
+			return fail("Git credential provider unavailable: " + err.Error())
 		}
-		credential = c
 		defer func() { credential.Credential = "" }()
 	}
+
 	timeout := 180 * time.Second
 	if op == "clone" {
 		timeout = 300 * time.Second
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	hooksDir, e := os.MkdirTemp("", "localmcp-git-hooks-")
-	if e != nil {
+
+	hooksDir, err := os.MkdirTemp("", "localmcp-git-hooks-")
+	if err != nil {
 		return fail("cannot prepare Git hooks isolation")
 	}
 	_ = os.Chmod(hooksDir, 0700)
 	defer os.RemoveAll(hooksDir)
-	args := []string{"-c", "credential.helper=", "-c", "core.hooksPath=" + hooksDir, "-c", "http.extraHeader=", "-c", "http.https://github.com/.extraHeader=", "-c", "http.sslVerify=true", "-c", "http.https://github.com/.sslVerify=true", "-c", "http.https://github.com/.sslCAInfo=", "-c", "http.https://github.com/.proxy=", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always"}
-	switch op {
-	case "clone":
-		args = append(args, "clone", "--", val(a, "repository"), repoPath)
-	case "fetch":
-		args = append(args, "-C", repoPath, "fetch", "--prune", "origin")
-		if ref != "" {
-			args = append(args, ref)
-		}
-	case "pull":
-		args = append(args, "-C", repoPath, "pull", "--ff-only")
-		if ref != "" {
-			args = append(args, "origin", ref)
-		}
-	case "push":
-		args = append(args, "-C", repoPath, "push", "origin")
-		if ref != "" {
-			args = append(args, ref)
-		}
-	case "status":
-		args = append(args, "-C", repoPath, "status", "--short", "--branch")
-	case "branch":
-		args = append(args, "-C", repoPath, "branch", "--list")
-	case "log":
-		args = append(args, "-C", repoPath, "log", "-10", "--oneline", "--decorate")
-	}
-	cmd := exec.CommandContext(cctx, "git", args...)
+
+	args := gitBaseArgs(hooksDir)
 	if op == "clone" {
-		if e := os.MkdirAll(filepath.Dir(repoPath), 0700); e != nil || !safeExistingPath(root, filepath.Dir(repoPath)) {
+		if err := os.MkdirAll(filepath.Dir(repoPath), 0770); err != nil || !safeExistingPath(root, filepath.Dir(repoPath)) {
 			return fail("cannot create a destination parent safely")
 		}
+		base := filepath.Dir(gitDir)
+		if err := os.MkdirAll(base, 0700); err != nil {
+			return fail("cannot create private Git metadata store")
+		}
+		_ = os.Chmod(base, 0700)
+		if _, err := os.Lstat(gitDir); err == nil {
+			return fail("private Git metadata already exists for this workspace")
+		} else if !os.IsNotExist(err) {
+			return fail("cannot inspect private Git metadata")
+		}
+		args = append(args, "clone", "--separate-git-dir="+gitDir, "--", val(a, "repository"), repoPath)
+	} else {
+		args = append(args, "--git-dir="+gitDir, "--work-tree="+repoPath)
+		switch op {
+		case "fetch":
+			args = append(args, "fetch", "--prune", "origin")
+			if ref != "" {
+				args = append(args, ref)
+			}
+		case "pull":
+			args = append(args, "pull", "--ff-only", "origin")
+			if ref != "" {
+				args = append(args, ref)
+			}
+		case "push":
+			if !validGitHubRemote(gitDir, repoPath, true) {
+				return fail("origin and push URL must be GitHub HTTPS repository URLs")
+			}
+			if dryRun {
+				args = append(args, "push", "--dry-run", "origin")
+			} else {
+				args = append(args, "push", "origin")
+			}
+			if ref != "" {
+				args = append(args, ref)
+			}
+		case "status":
+			args = append(args, "status", "--short", "--branch")
+		case "branch":
+			if ref == "" {
+				args = append(args, "branch", "--list")
+			} else {
+				args = append(args, "branch", "--create-reflog", ref)
+			}
+		case "log":
+			args = append(args, "log", "-10", "--oneline", "--decorate")
+		case "commit":
+			args = append(args, "add", "-A", "--", ".")
+		}
+		if (op == "fetch" || op == "pull") && !validGitHubRemote(gitDir, repoPath, false) {
+			return fail("origin must be a GitHub HTTPS repository URL")
+		}
 	}
+
+	cmd := exec.CommandContext(cctx, "git", args...)
 	cmd.Env = gitSafeEnv(os.Environ())
-	var cleanup func()
 	if needsCredential {
 		askpass, clean, e := writeAskpass(credential)
 		if e != nil {
 			return fail("cannot prepare temporary Git credential helper")
 		}
-		cleanup = clean
-		defer cleanup()
+		defer clean()
 		cmd.Env = append(cmd.Env, "GIT_ASKPASS="+askpass, "GIT_TERMINAL_PROMPT=0")
 	}
 	cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
-	stdout, stderr := &cappedBuffer{max: r.D.MaxOutput}, &cappedBuffer{max: r.D.MaxOutput}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	err := cmd.Run()
-	output := strings.TrimSpace(stdout.String())
-	if e := strings.TrimSpace(stderr.String()); e != "" {
-		if output != "" {
-			output += "\n"
-		}
-		output += "[stderr]\n" + e
-	}
-	if credential.Credential != "" {
-		output = strings.ReplaceAll(output, credential.Credential, "[REDACTED]")
-	}
+	output, runErr := runGitCommand(cmd, r.D.MaxOutput)
 	if cctx.Err() == context.DeadlineExceeded {
 		return fail("Git operation timed out")
 	}
-	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return fail(fmt.Sprintf("Git operation failed (exit %d): %s", exit.ExitCode(), output))
+	if runErr != nil {
+		return gitCommandFailure(runErr, output)
+	}
+
+	if op == "clone" {
+		marker := filepath.Join(repoPath, ".git")
+		if info, e := os.Lstat(marker); e == nil && info.Mode().IsRegular() {
+			if e = os.Remove(marker); e != nil {
+				return fail("cloned repository metadata could not be isolated from the shared workspace")
+			}
+		} else {
+			return fail("clone did not create the expected separate Git metadata marker")
 		}
-		return fail("Git operation failed: " + err.Error())
+		_ = os.Chmod(gitDir, 0700)
+		if _, e := runSimpleGit(cctx, gitDir, "", hooksDir, "config", "user.name", "LocalMCP Git Executor"); e != nil {
+			return fail("cannot configure private Git author identity")
+		}
+		if _, e := runSimpleGit(cctx, gitDir, "", hooksDir, "config", "user.email", "localmcp-git-executor@users.noreply.github.com"); e != nil {
+			return fail("cannot configure private Git author identity")
+		}
+	}
+	if op == "commit" {
+		commitArgs := append(gitBaseArgs(hooksDir), "--git-dir="+gitDir, "--work-tree="+repoPath, "commit", "-m", message)
+		commitCmd := exec.CommandContext(cctx, "git", commitArgs...)
+		commitCmd.Env = append(gitSafeEnv(os.Environ()), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+		commitOutput, commitErr := runGitCommand(commitCmd, r.D.MaxOutput)
+		output = strings.TrimSpace(output + "\n" + commitOutput)
+		if commitErr != nil {
+			return gitCommandFailure(commitErr, output)
+		}
+	}
+	if credential.Credential != "" {
+		output = strings.ReplaceAll(output, credential.Credential, "[REDACTED]")
 	}
 	if output == "" {
 		output = "Git " + op + " completed successfully"
 	}
 	return ok(output + "\n[exit code: 0]")
+}
+
+func gitBaseArgs(hooksDir string) []string {
+	return []string{"-c", "credential.helper=", "-c", "core.hooksPath=" + hooksDir,
+		"-c", "http.extraHeader=", "-c", "http.https://github.com/.extraHeader=",
+		"-c", "http.sslVerify=true", "-c", "http.https://github.com/.sslVerify=true",
+		"-c", "http.https://github.com/.sslCAInfo=", "-c", "http.https://github.com/.proxy=",
+		"-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "commit.gpgsign=false"}
+}
+
+func privateGitDir(repoPath string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("Git executor home directory unavailable")
+	}
+	base := filepath.Join(home, ".localmcp-git", "repos")
+	if err := os.MkdirAll(base, 0700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(filepath.Dir(base), 0700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(base, 0700); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(repoPath))
+	return filepath.Join(base, hex.EncodeToString(sum[:])+".git"), nil
+}
+
+func validPrivateGitDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0077 == 0
+}
+
+func runSimpleGit(ctx context.Context, gitDir, workTree, hooksDir string, args ...string) (string, error) {
+	cmdArgs := gitBaseArgs(hooksDir)
+	cmdArgs = append(cmdArgs, "--git-dir="+gitDir)
+	if workTree != "" {
+		cmdArgs = append(cmdArgs, "--work-tree="+workTree)
+	}
+	cmdArgs = append(cmdArgs, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd.Env = append(gitSafeEnv(os.Environ()), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	return runGitCommand(cmd, 64*1024)
+}
+
+func runGitCommand(cmd *exec.Cmd, maxOutput int) (string, error) {
+	stdout, stderr := &cappedBuffer{max: maxOutput}, &cappedBuffer{max: maxOutput}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	output := strings.TrimSpace(stdout.String())
+	if value := strings.TrimSpace(stderr.String()); value != "" {
+		if output != "" {
+			output += "\n"
+		}
+		output += "[stderr]\n" + value
+	}
+	return output, err
+}
+
+func gitCommandFailure(err error, output string) Result {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return fail(fmt.Sprintf("Git operation failed (exit %d): %s", exit.ExitCode(), output))
+	}
+	return fail("Git operation failed: " + err.Error())
 }
 
 func (r *Registry) fetchGitCredential(ctx context.Context, account, operation string) (gitCredential, error) {
@@ -209,15 +335,19 @@ func (r *Registry) fetchGitCredential(ctx context.Context, account, operation st
 		return gitCredential{}, e
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return gitCredential{}, fmt.Errorf("OIDC token request returned HTTP %d", resp.StatusCode)
 	}
 	var oidc oidcTokenResponse
 	if e = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&oidc); e != nil || oidc.Value == "" {
 		return gitCredential{}, errors.New("invalid OIDC token response")
 	}
+	endpoint, e := url.Parse(r.D.Config.GitCredentialURL)
+	if e != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Path != "/internal/runner/git-credential" {
+		return gitCredential{}, errors.New("invalid credential provider endpoint")
+	}
 	body, _ := json.Marshal(map[string]string{"account": account, "operation": operation})
-	req, e = http.NewRequestWithContext(ctx, http.MethodPost, r.D.Config.GitCredentialURL, strings.NewReader(string(body)))
+	req, e = http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(string(body)))
 	if e != nil {
 		return gitCredential{}, e
 	}
@@ -229,7 +359,7 @@ func (r *Registry) fetchGitCredential(ctx context.Context, account, operation st
 		return gitCredential{}, e
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return gitCredential{}, fmt.Errorf("credential provider returned HTTP %d", resp.StatusCode)
 	}
 	var cred gitCredential
@@ -238,33 +368,35 @@ func (r *Registry) fetchGitCredential(ctx context.Context, account, operation st
 	}
 	return cred, nil
 }
+
 func writeAskpass(c gitCredential) (string, func(), error) {
 	dir, e := os.MkdirTemp("", "localmcp-git-auth-")
 	if e != nil {
 		return "", nil, e
 	}
 	if e = os.Chmod(dir, 0700); e != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", nil, e
 	}
 	secret := filepath.Join(dir, "credential")
 	payload := c.Username + "\n" + c.Credential + "\n"
 	if e = os.WriteFile(secret, []byte(payload), 0600); e != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", nil, e
 	}
 	script := filepath.Join(dir, "askpass")
 	body := "#!/bin/sh\ncase \"$1\" in *Username*) sed -n '1p' \"" + secret + "\" ;; *) sed -n '2p' \"" + secret + "\" ;; esac\n"
 	if runtime.GOOS == "windows" {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", nil, errors.New("secure askpass helper is not supported on Windows")
 	}
 	if e = os.WriteFile(script, []byte(body), 0700); e != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", nil, e
 	}
 	return script, func() { _ = os.RemoveAll(dir) }, nil
 }
+
 func gitSafeEnv(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, v := range in {
@@ -273,13 +405,14 @@ func gitSafeEnv(in []string) []string {
 			continue
 		}
 		switch k {
-		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY":
+		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
 			continue
 		}
 		out = append(out, v)
 	}
 	return out
 }
+
 func withinRoot(root, path string) bool {
 	rel, e := filepath.Rel(root, path)
 	return e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
@@ -309,13 +442,15 @@ func safeParentPath(root, path string) bool {
 		path = parent
 	}
 }
-func validGitHubRemote(path string, checkPush bool) bool {
-	args := []string{"-C", path, "remote", "get-url"}
+func validGitHubRemote(gitDir, workTree string, checkPush bool) bool {
+	args := append(gitBaseArgs(os.TempDir()), "--git-dir="+gitDir, "--work-tree="+workTree, "remote", "get-url")
 	if checkPush {
 		args = append(args, "--push")
 	}
 	args = append(args, "origin")
-	remote, err := exec.Command("git", args...).Output()
+	cmd := exec.Command("git", args...)
+	cmd.Env = append(gitSafeEnv(os.Environ()), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	remote, err := cmd.Output()
 	return err == nil && githubRepoRE.MatchString(strings.TrimSpace(string(remote)))
 }
 func validBranchRef(ref string) bool {

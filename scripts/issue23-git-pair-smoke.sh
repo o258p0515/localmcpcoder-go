@@ -63,14 +63,22 @@ jq -e '.result.tools | (length == 1 and .[0].name == "git_execute" and ((.[0].in
 PRIVATE_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/kiem-thu.git",destination:"private-empty"}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_CLONE" >/dev/null
 ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PRIVATE_CLONE"
-test -d "$ROOT/private-empty/.git"
+test ! -e "$ROOT/private-empty/.git"
 PUBLIC_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/localmcpcoder-go.git",destination:"public-shared"}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev/null
 AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'shared-workspace-check\\n' > issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$AGENT_WRITE" >/dev/null
+test ! -e "$ROOT/public-shared/.git"
 STATUS="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:"public-shared"}}}')")"
 jq -r '.result.content[]?.text // empty' <<<"$STATUS" | grep -q 'issue23-shared-workspace.txt'
-for op in fetch pull push branch log; do
+PRIVATE_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'private-commit-check\n' > README.md" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{cwd:"private-empty",command:$command}}}')")"
+jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_WRITE" >/dev/null
+COMMIT="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:9,method:"tools/call",params:{name:"git_execute",arguments:{operation:"commit",account:"personal",path:"private-empty",message:"issue23 private metadata smoke"}}}')")"
+jq -e '.result.isError != true and .error == null' <<<"$COMMIT" >/dev/null
+PUSH="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:10,method:"tools/call",params:{name:"git_execute",arguments:{operation:"push",account:"personal",path:"private-empty",ref:"main",dry_run:true}}}')")"
+jq -e '.result.isError != true and .error == null' <<<"$PUSH" >/dev/null
+! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PUSH"
+for op in fetch pull branch log; do
   RESPONSE="$(mcp_call 8788 "$(jq -cn --arg op "$op" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"git_execute",arguments:{operation:$op,account:"personal",path:"public-shared",ref:"main"}}}')")"
   jq -e '.result.isError != true and .error == null' <<<"$RESPONSE" >/dev/null
   ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$RESPONSE"
@@ -80,7 +88,7 @@ sudo -u mcp-git env ISSUE23_ISOLATION_SENTINEL=private-value sh -c \
 SENTINEL_PID=$!
 sleep 1
 GIT_SENTINEL_PID="$(pgrep -u mcp-git -f '^sleep 90$' | head -n1)"
-ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\000' '\\n' </proc/$GIT_SENTINEL_PID/environ 2>/dev/null | grep -q ISSUE23_ISOLATION_SENTINEL; then exit 42; fi; echo isolation-ok"
+ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\000' '\\n' </proc/$GIT_SENTINEL_PID/environ 2>/dev/null | grep -q ISSUE23_ISOLATION_SENTINEL; then exit 42; fi; if ls /home/mcp-git/.localmcp-git/repos >/dev/null 2>&1; then exit 43; fi; if git -C public-shared rev-parse --git-dir >/dev/null 2>&1; then exit 44; fi; echo isolation-ok"
 ISOLATION="$(mcp_call 8787 "$(jq -cn --arg command "$ISOLATION_COMMAND" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$ISOLATION" >/dev/null
 jq -r '.result.content[]?.text // empty' <<<"$ISOLATION" | grep -q 'isolation-ok'

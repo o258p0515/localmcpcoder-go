@@ -90,21 +90,54 @@ func TestSafeExistingPathRejectsSymlinkEscape(t *testing.T) {
 }
 
 func TestValidGitHubRemoteRejectsDifferentPushURL(t *testing.T) {
-	root := t.TempDir()
+	gitDir, workTree := filepath.Join(t.TempDir(), "private.git"), t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd := exec.Command("git", args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run("init")
-	run("remote", "add", "origin", "https://github.com/owner/repo.git")
-	run("remote", "set-url", "--push", "origin", "https://attacker.example/owner/repo.git")
-	if validGitHubRemote(root, false) != true {
+	run("init", "--bare", gitDir)
+	run("--git-dir="+gitDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	run("--git-dir="+gitDir, "remote", "set-url", "--push", "origin", "https://attacker.example/owner/repo.git")
+	if !validGitHubRemote(gitDir, workTree, false) {
 		t.Fatal("expected valid fetch URL")
 	}
-	if validGitHubRemote(root, true) {
+	if validGitHubRemote(gitDir, workTree, true) {
 		t.Fatal("accepted attacker push URL")
+	}
+}
+
+func TestPrivateGitDirIsOutsideSharedWorkspaceAndPrivate(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(root, "repo")
+	gitDir, err := privateGitDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withinRoot(root, gitDir) {
+		t.Fatal("Git metadata is inside the Agent shared workspace")
+	}
+	base := filepath.Dir(gitDir)
+	info, err := os.Stat(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		t.Fatalf("private Git metadata directory permissions too broad: %o", info.Mode().Perm())
+	}
+}
+
+func TestGitExecuteRejectsGitMetadataInSharedWorkspace(t *testing.T) {
+	r := gitProfileRegistry(t)
+	path := filepath.Join(r.D.Root, "repo")
+	if err := os.MkdirAll(filepath.Join(path, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	res := r.Call(context.Background(), "git_execute", map[string]any{"operation": "status", "account": "personal", "path": "repo"})
+	if !res.IsError {
+		t.Fatal("accepted Agent-controlled .git metadata")
 	}
 }

@@ -35,9 +35,9 @@ sudo install -d -o "$(id -un)" -g mcp-workspace -m 2770 "$ROOT"
 printf 'MCP_SHARED_ROOT=%s\\n' "$ROOT" >> "$GITHUB_ENV"
 umask 0002
 checkpoint "start-agent-and-git-mcp-servers"
-sudo -H --preserve-env=MCP_TOKEN -u mcp-agent "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
+sudo -H --preserve-env=MCP_TOKEN -u mcp-agent bash -c 'umask 0002; exec "$@"' _ "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
-sudo -H --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
+sudo -H --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git bash -c 'umask 0002; exec "$@"' _ "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
 GIT_PID=$!
 wait_http() {
   local port="$1"

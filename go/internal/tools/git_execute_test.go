@@ -241,3 +241,20 @@ func TestGitBaseArgsPreservesSystemCertificateAuthorities(t *testing.T) {
 		t.Fatalf("TLS verification must remain enabled: %s", args)
 	}
 }
+
+func TestMakeSharedWorkspaceGroupWritable(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0700); err != nil { t.Fatal(err) }
+	file := filepath.Join(nested, "agent-created.txt")
+	if err := os.WriteFile(file, []byte("shared"), 0600); err != nil { t.Fatal(err) }
+	if err := makeSharedWorkspaceGroupWritable(root); err != nil { t.Fatal(err) }
+	for _, dir := range []string{root, nested} {
+		info, err := os.Stat(dir)
+		if err != nil { t.Fatal(err) }
+		if info.Mode().Perm() != 0770 { t.Fatalf("directory %s must be group-writable; got %v", dir, info.Mode()) }
+	}
+	info, err := os.Stat(file)
+	if err != nil { t.Fatal(err) }
+	if info.Mode().Perm()&0060 != 0060 || info.Mode().Perm()&0007 != 0 { t.Fatalf("file must be group-readable/writable and not world-accessible; got %v", info.Mode()) }
+}

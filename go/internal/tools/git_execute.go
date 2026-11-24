@@ -24,10 +24,6 @@ type gitCredential struct {
 	Username   string `json:"username"`
 	Credential string `json:"credential"`
 }
-type oidcTokenResponse struct {
-	Value string `json:"value"`
-}
-
 var githubRepoRE = regexp.MustCompile("^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?$")
 var accountAliasRE = regexp.MustCompile("^[A-Za-z0-9_.-]{1,64}$")
 
@@ -318,57 +314,25 @@ func gitCommandFailure(err error, output string) Result {
 }
 
 func (r *Registry) fetchGitCredential(ctx context.Context, account, operation string) (gitCredential, error) {
-	requestURL, requestToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-	if requestURL == "" || requestToken == "" {
-		return gitCredential{}, errors.New("GitHub Actions OIDC is not available")
-	}
-	u, e := url.Parse(requestURL)
-	if e != nil {
-		return gitCredential{}, errors.New("invalid OIDC request URL")
-	}
-	q := u.Query()
-	q.Set("audience", "localmcpcoder-git-credential")
-	u.RawQuery = q.Encode()
-	req, e := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if e != nil {
-		return gitCredential{}, e
-	}
-	req.Header.Set("Authorization", "Bearer "+requestToken)
-	client := http.Client{Timeout: 15 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, e := client.Do(req)
-	if e != nil {
-		return gitCredential{}, e
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return gitCredential{}, fmt.Errorf("OIDC token request returned HTTP %d", resp.StatusCode)
-	}
-	var oidc oidcTokenResponse
-	if e = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&oidc); e != nil || oidc.Value == "" {
-		return gitCredential{}, errors.New("invalid OIDC token response")
-	}
-	endpoint, e := url.Parse(r.D.Config.GitCredentialURL)
-	if e != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Path != "/internal/runner/git-credential" {
+	executorToken := os.Getenv("GIT_EXECUTOR_TOKEN")
+	if len(executorToken) < 32 { return gitCredential{}, errors.New("dedicated Git executor token is not configured") }
+	endpoint, err := url.Parse(r.D.Config.GitCredentialURL)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Path != "/internal/runner/git-credential" {
 		return gitCredential{}, errors.New("invalid credential provider endpoint")
 	}
 	body, _ := json.Marshal(map[string]string{"account": account, "operation": operation})
-	req, e = http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(string(body)))
-	if e != nil {
-		return gitCredential{}, e
-	}
-	req.Header.Set("Authorization", "Bearer "+oidc.Value)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(string(body)))
+	if err != nil { return gitCredential{}, errors.New("cannot create credential provider request") }
+	req.Header.Set("Authorization", "Bearer "+executorToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, e = client.Do(req)
-	if e != nil {
-		return gitCredential{}, e
-	}
+	client := http.Client{Timeout: 15 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil { return gitCredential{}, errors.New("credential provider request failed") }
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return gitCredential{}, fmt.Errorf("credential provider returned HTTP %d", resp.StatusCode)
-	}
+	if resp.StatusCode != http.StatusOK { return gitCredential{}, fmt.Errorf("credential provider returned HTTP %d", resp.StatusCode) }
 	var cred gitCredential
-	if e = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&cred); e != nil || cred.Credential == "" {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&cred); err != nil || cred.Credential == "" {
 		return gitCredential{}, errors.New("credential response is invalid")
 	}
 	return cred, nil
@@ -406,11 +370,11 @@ func gitSafeEnv(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, v := range in {
 		k := strings.SplitN(v, "=", 2)[0]
-		if strings.HasPrefix(k, "GIT_") || strings.HasPrefix(k, "ACTIONS_ID_TOKEN_") {
+		if strings.HasPrefix(k, "GIT_") {
 			continue
 		}
 		switch k {
-		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
+		case "MCP_TOKEN", "MCP_OAUTH_CLIENT_SECRET", "GIT_EXECUTOR_TOKEN", "HUB_URLS", "CF_API_TOKEN", "TS_AUTHKEY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
 			continue
 		}
 		out = append(out, v)

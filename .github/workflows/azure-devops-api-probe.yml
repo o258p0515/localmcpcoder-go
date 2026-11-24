@@ -121,10 +121,10 @@ steps:
 """
               pipeline_id=None
               branch_created=False
-              def api(label,method,path,payload=None,api_version="7.1"):
+              def api(label,method,path,payload=None,api_version="7.1",accept="application/json"):
                 url=org+path+("?" if "?" not in path else "&")+"api-version="+api_version
                 data=None if payload is None else json.dumps(payload).encode()
-                req=urllib.request.Request(url,data=data,headers={**h,"Content-Type":"application/json"},method=method)
+                req=urllib.request.Request(url,data=data,headers={**h,"Accept":accept,"Content-Type":"application/json"},method=method)
                 try:
                   with urllib.request.urlopen(req,timeout=35) as rr: code=rr.status; raw=rr.read(); ct=rr.headers.get("Content-Type","")
                 except urllib.error.HTTPError as ee: code=ee.code; raw=ee.read(); ct=ee.headers.get("Content-Type","")
@@ -150,7 +150,7 @@ steps:
                     if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"):
                       pipeline_id=pipe["id"]
                       # Successful short run: verify create/queue, build status, timeline, and final log formats.
-                      run_body={"resources":{"repositories":{"self":{"repository":{"type":"azureReposGit"},"refName":branch}}},"templateParameters":{"vmImage":"ubuntu-latest","holdSeconds":0}}
+                      run_body={"resources":{"repositories":{"self":{"repository":{"id":rid,"name":repo["name"],"type":"azureReposGit"},"refName":branch}}},"templateParameters":{"vmImage":"ubuntu-latest","holdSeconds":0}}
                       code,run=api("C3-linux-queue","POST",f"/{pname}/_apis/pipelines/{pipeline_id}/runs",run_body)
                       run_id=run.get("id") if isinstance(run,dict) else None
                       if 200<=code<300 and run_id:
@@ -166,8 +166,8 @@ steps:
                           log_items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
                           if log_items:
                             lid=log_items[0]["id"]
-                            api("D3-final-text","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50","text/plain")
-                            api("D3-final-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50","application/json")
+                            api("D3-final-text","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
+                            api("D3-final-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
                           else: print(json.dumps({"probe":"D3-final","result":"BLOCKED_NO_LOG_RECORD","response_keys":list(logs) if isinstance(logs,dict) else []}))
                         else: print(json.dumps({"probe":"C2-poll","result":"TIMEOUT_OR_NOT_COMPLETED","build":{k:build.get(k) for k in ("id","status","result")} if isinstance(build,dict) else None}))
                       else: print(json.dumps({"probe":"C3-linux-queue","result":"FAIL_OR_NO_RUN_ID"}))
@@ -188,8 +188,8 @@ steps:
                           live_items=live_logs.get("value",[]) if isinstance(live_logs,dict) else live_logs.get("logs",[]) if isinstance(live_logs,dict) else []
                           if live_items:
                             lid=live_items[0]["id"]
-                            api("D3-live-text","GET",f"/{pname}/_apis/build/builds/{live_id}/logs/{lid}?startLine=1&endLine=50","text/plain")
-                            api("D3-live-json","GET",f"/{pname}/_apis/build/builds/{live_id}/logs/{lid}?startLine=1&endLine=50","application/json")
+                            api("D3-live-text","GET",f"/{pname}/_apis/build/builds/{live_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
+                            api("D3-live-json","GET",f"/{pname}/_apis/build/builds/{live_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
                           api("C4-cancel","PATCH",f"/{pname}/_apis/build/builds/{live_id}",{"status":"cancelling"})
                           for _ in range(12):
                             _,cancelled=api("C4-poll-cancel","GET",f"/{pname}/_apis/build/builds/{live_id}")

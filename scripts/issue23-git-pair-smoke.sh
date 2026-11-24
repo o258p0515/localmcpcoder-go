@@ -244,13 +244,17 @@ ISOLATION="$(mcp_call 8787 "$(jq -cn --arg command "$ISOLATION_COMMAND" '{jsonrp
 jq -e '.result.isError != true and .error == null' <<<"$ISOLATION" >/dev/null
 jq -r '.result.content[]?.text // empty' <<<"$ISOLATION" | grep -q 'isolation-ok'
 sudo kill "$SENTINEL_PID" 2>/dev/null || true
-checkpoint "verify-redacted-logs-and-temp-cleanup"
+checkpoint "verify-redacted-logs"
 if grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' "$GIT_LOG" "$AGENT_LOG"; then
-  echo "credential-like value found in runner logs" >&2
+  echo "credential-like pattern found in runner logs; matching lines redacted:" >&2
+  grep -Ein 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' "$GIT_LOG" "$AGENT_LOG" | sed -E 's/(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+)/[REDACTED]/g' | head -20 >&2
   exit 1
 fi
-if sudo find /tmp -maxdepth 1 -type d -name 'localmcp-git-auth-*' -print -quit | grep -q .; then
-  echo "temporary Git credential directory was not cleaned" >&2
+checkpoint "verify-temp-credential-cleanup"
+LEFTOVERS="$(sudo find /tmp -maxdepth 1 -type d -name 'localmcp-git-auth-*' -print)"
+if [ -n "$LEFTOVERS" ]; then
+  echo "temporary Git credential directories were not cleaned:" >&2
+  printf '%s\\n' "$LEFTOVERS" >&2
   exit 1
 fi
 echo "issue23 paired-runner smoke: PASS (dedicated-token/private clone, Git-only catalog, shared workspace, fetch/pull/push auth, UID isolation, temp cleanup)"

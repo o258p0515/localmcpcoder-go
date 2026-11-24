@@ -90,7 +90,8 @@ jobs:
           jq -e '.result.isError != true and .error == null' <<<"$CLONE_RESULT" >/dev/null
           echo "E2E created its own fresh clone in $WORKTREE."
 
-          CREATE_FILE=$(jq -cn --arg path "$WORKTREE/issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"test -f \""+$path.replace(/"/g,"\\\"")+" \"; printf \"agent-created\\n\" > \""+$path.replace(/"/g,"\\\"")+"\""}}}')
+          CREATE_COMMAND="printf 'agent-created\\n' > '$WORKTREE/issue23-shared-workspace.txt'"
+          CREATE_FILE=$(jq -cn --arg command "$CREATE_COMMAND" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')
           CREATE_RESULT=$(mcp_call "$CREATE_FILE")
           jq -e '.result.isError != true and .error == null' <<<"$CREATE_RESULT" >/dev/null
           echo "Agent runner wrote a new file into the Git runner's shared worktree."

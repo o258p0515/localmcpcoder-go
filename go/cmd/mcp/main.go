@@ -36,7 +36,7 @@ func main() {
 	defer stop()
 	addr:=fmt.Sprintf("127.0.0.1:%d",cfg.Port)
 	shutdownRequested := make(chan struct{}, 1)
-	handler := withInternalShutdown(srv.Handler(), cfg.Token, shutdownRequested)
+	handler := withInternalShutdown(srv.Handler(), cfg.ShutdownToken, shutdownRequested)
 	httpSrv:=&http.Server{Addr:addr,Handler:handler,ReadHeaderTimeout:10*time.Second}
 	go func() { select { case <-shutdownRequested: stop(); case <-ctx.Done(): } }()
 	errCh:=make(chan error,1)

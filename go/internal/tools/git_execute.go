@@ -246,7 +246,7 @@ func gitBaseArgs(hooksDir string) []string {
 	return []string{"-c", "credential.helper=", "-c", "core.hooksPath=" + hooksDir,
 		"-c", "http.extraHeader=", "-c", "http.https://github.com/.extraHeader=",
 		"-c", "http.sslVerify=true", "-c", "http.https://github.com/.sslVerify=true",
-		"-c", "http.https://github.com/.sslCAInfo=", "-c", "http.https://github.com/.proxy=",
+		"-c", "http.https://github.com/.proxy=",
 		"-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "commit.gpgsign=false"}
 }
 

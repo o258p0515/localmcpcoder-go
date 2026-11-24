@@ -231,3 +231,13 @@ func TestGitSubcommandsWorkWhenInheritedCwdIsInaccessible(t *testing.T) {
 	got, err := runSimpleGit(context.Background(), gitDir, "", os.TempDir(), "rev-parse", "--is-bare-repository")
 	if err != nil || strings.TrimSpace(got) != "true" { t.Fatalf("runSimpleGit failed: output=%q err=%v", got, err) }
 }
+
+func TestGitBaseArgsPreservesSystemCertificateAuthorities(t *testing.T) {
+	args := strings.Join(gitBaseArgs(t.TempDir()), " ")
+	if strings.Contains(args, "sslCAInfo") {
+		t.Fatalf("Git base args must not override system CA bundle: %s", args)
+	}
+	if !strings.Contains(args, "http.sslVerify=true") {
+		t.Fatalf("TLS verification must remain enabled: %s", args)
+	}
+}

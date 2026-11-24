@@ -129,7 +129,6 @@ ISOLATION="$(mcp_call 8787 "$(jq -cn --arg command "$ISOLATION_COMMAND" '{jsonrp
 jq -e '.result.isError != true and .error == null' <<<"$ISOLATION" >/dev/null
 jq -r '.result.content[]?.text // empty' <<<"$ISOLATION" | grep -q 'isolation-ok'
 sudo kill "$SENTINEL_PID" 2>/dev/null || true
-checkpoint "verify-redacted-logs-and-temp-cleanup"
 checkpoint "verify-redacted-logs"
 if grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' "$GIT_LOG" "$AGENT_LOG"; then
   echo "credential-like pattern found in runner logs; matching lines redacted:" >&2

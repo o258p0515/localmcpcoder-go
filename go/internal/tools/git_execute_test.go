@@ -189,3 +189,20 @@ func TestGitOutputRedactsCredentialOnErrorAndSuccess(t *testing.T) {
 		t.Fatalf("credential not redacted: %s", got)
 	}
 }
+
+func TestGitSafeEnvRemovesDedicatedExecutorToken(t *testing.T) {
+	env := gitSafeEnv([]string{
+		"PATH=/usr/bin",
+		"GIT_EXECUTOR_TOKEN=must-not-reach-git",
+		"MCP_TOKEN=also-private",
+		"HTTP_PROXY=http://proxy.invalid",
+		"HOME=/home/mcp-git",
+	})
+	joined := strings.Join(env, "\n")
+	for _, forbidden := range []string{"GIT_EXECUTOR_TOKEN=", "MCP_TOKEN=", "HTTP_PROXY="} {
+		if strings.Contains(joined, forbidden) { t.Fatalf("sensitive environment variable leaked: %s", forbidden) }
+	}
+	if !strings.Contains(joined, "PATH=/usr/bin") || !strings.Contains(joined, "HOME=/home/mcp-git") {
+		t.Fatalf("required process environment was removed: %q", joined)
+	}
+}

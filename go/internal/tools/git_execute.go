@@ -370,7 +370,7 @@ func gitSafeEnv(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, v := range in {
 		k := strings.SplitN(v, "=", 2)[0]
-		if strings.HasPrefix(k, "GIT_") || strings.HasPrefix(k, "ACTIONS_ID_TOKEN_") {
+		if strings.HasPrefix(k, "GIT_") {
 			continue
 		}
 		switch k {

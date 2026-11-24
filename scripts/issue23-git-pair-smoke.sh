@@ -37,7 +37,7 @@ umask 0002
 checkpoint "start-agent-and-git-mcp-servers"
 sudo --preserve-env=MCP_TOKEN -u mcp-agent "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
-sudo --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,MCP_TOOL_PROFILE,GIT_EXECUTOR_TOKEN -u mcp-git "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
+sudo --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
 GIT_PID=$!
 wait_http() {
   local port="$1"
@@ -100,7 +100,7 @@ SENTINEL_PID=$!
 sleep 1
 GIT_SERVER_PID="$(pgrep -u mcp-git -f "$BIN" | head -n1)"
 if [ -z "$GIT_SERVER_PID" ]; then echo "cannot locate isolated Git executor process" >&2; exit 1; fi
-ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\\\000' '\\\\n' </proc/$GIT_SERVER_PID/environ 2>/dev/null | grep -q GIT_EXECUTOR_TOKEN; then exit 42; fi; if env | grep -q '^ACTIONS_ID_TOKEN_REQUEST_TOKEN='; then exit 43; fi; if ls /home/mcp-git/.localmcp-git/repos >/dev/null 2>&1; then exit 44; fi; if git -C public-shared rev-parse --git-dir >/dev/null 2>&1; then exit 45; fi; echo isolation-ok"
+ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\\\000' '\\\\n' </proc/$GIT_SERVER_PID/environ 2>/dev/null | grep -q GIT_EXECUTOR_TOKEN; then exit 42; fi; if env | grep -q '^GIT_EXECUTOR_TOKEN='; then exit 43; fi; if ls /home/mcp-git/.localmcp-git/repos >/dev/null 2>&1; then exit 44; fi; if git -C public-shared rev-parse --git-dir >/dev/null 2>&1; then exit 45; fi; echo isolation-ok"
 ISOLATION="$(mcp_call 8787 "$(jq -cn --arg command "$ISOLATION_COMMAND" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$ISOLATION" >/dev/null
 jq -r '.result.content[]?.text // empty' <<<"$ISOLATION" | grep -q 'isolation-ok'

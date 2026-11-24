@@ -7,6 +7,11 @@ name: Azure DevOps REST API Probe
         required: false
         type: boolean
         default: false
+      run_preview_e2e:
+        description: "Run the live Issue 68 preview E2E (requires rotated Azure PAT and configured HUB_URLS)"
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -316,6 +321,7 @@ jobs:
           print(json.dumps({"probe":"E2","result":"PARTIAL","detail":"203 and HTML login responses are classified as blocked; invalid PAT is not intentionally tested"}))
           PY
       - name: Live Azure DevOps runner E2E against Issue 68 preview
+        if: ${{ inputs.run_preview_e2e }}
         env:
           PREVIEW_DOMAIN: https://github-mcp-proxy-issue68-preview.localmcpcoder-5b1b15.workers.dev
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}

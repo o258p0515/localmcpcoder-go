@@ -122,7 +122,7 @@ func TestGitExecuteCommitRequiresExplicitPaths(t *testing.T) {
 	r := gitProfileRegistry(t)
 	if err := os.MkdirAll(filepath.Join(r.D.Root, "repo"), 0700); err != nil { t.Fatal(err) }
 	res := r.Call(context.Background(), "git_execute", map[string]any{"operation": "commit", "account": "personal", "path": "repo", "message": "safe commit"})
-	if !res.IsError || !strings.Contains(res.Content[0]["text"].(string), "explicit relative paths") {
+	if !res.IsError || !strings.Contains(res.Content[0]["text"], "explicit relative paths") {
 		t.Fatalf("expected explicit commit paths validation, got %#v", res)
 	}
 }

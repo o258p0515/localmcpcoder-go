@@ -97,28 +97,29 @@ jobs:
               run_tag=os.environ.get("GITHUB_RUN_ID","manual")
               branch="refs/heads/issue69-probe-"+run_tag
               file_path="/.azure-pipelines/issue69-probe.yml"
-              yaml_text="""parameters:
-          - name: vmImage
-            type: string
-            default: ubuntu-latest
-          - name: holdSeconds
-            type: number
-            default: 0
-          pool:
-            vmImage: """ + chr(36) + "{{ parameters.vmImage }}"
-          steps:
-          - bash: |
-              echo 'ISSUE69_PROBE_START'
-              echo "Agent OS: $(Agent.OS)"
-              echo "Agent name: $(Agent.Name)"
-              echo "Build ID: $(Build.BuildId)"
-              echo "Repository: $(Build.Repository.Name)"
-              echo 'ISSUE69_PROBE_LOG_MARKER_001'
-              echo 'ISSUE69_PROBE_LOG_MARKER_002'
-              sleep """ + chr(36) + "{{ parameters.holdSeconds }}"
-              echo 'ISSUE69_PROBE_END'
-            displayName: Issue 69 API probe
-"""
+              yaml_text="\n".join([
+                "parameters:",
+                "- name: vmImage",
+                "  type: string",
+                "  default: ubuntu-latest",
+                "- name: holdSeconds",
+                "  type: number",
+                "  default: 0",
+                "pool:",
+                "  vmImage: "+chr(36)+"{{ parameters.vmImage }}",
+                "steps:",
+                "- bash: |",
+                "    echo 'ISSUE69_PROBE_START'",
+                "    echo \"Agent OS: $(Agent.OS)\"",
+                "    echo \"Agent name: $(Agent.Name)\"",
+                "    echo \"Build ID: $(Build.BuildId)\"",
+                "    echo \"Repository: $(Build.Repository.Name)\"",
+                "    echo 'ISSUE69_PROBE_LOG_MARKER_001'",
+                "    echo 'ISSUE69_PROBE_LOG_MARKER_002'",
+                "    sleep "+chr(36)+"{{ parameters.holdSeconds }}",
+                "    echo 'ISSUE69_PROBE_END'",
+                "  displayName: Issue 69 API probe",
+              ])+"\n"
               pipeline_id=None
               branch_created=False
               def api(label,method,path,payload=None,api_version="7.1",accept="application/json"):

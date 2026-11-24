@@ -68,7 +68,7 @@ checkpoint "verify-agent-and-git-tool-catalogs"
 AGENT_TOOLS="$(mcp_call 8787 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
 GIT_TOOLS="$(mcp_call 8788 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
 jq -e '.result.tools | (map(.name) | index("bash") != null and index("git_execute") == null)' <<<"$AGENT_TOOLS" >/dev/null
-jq -e '.result.tools | (length == 1 and .[0].name == "git_execute" and ((.[0].inputSchema.properties // {}) | has("token") | not) and ((.[0].inputSchema.properties // {}) | has("credential") | not) and ((.[0].inputSchema.properties // {}) | has("message")) and ((.[0].inputSchema.properties // {}) | has("dry_run")) and ((.[0].inputSchema.operation.enum | index("commit")) != null))' <<<"$GIT_TOOLS" >/dev/null
+jq -e '.result.tools | (length == 1 and .[0].name == "git_execute" and ((.[0].inputSchema.properties // {}) | has("token") | not) and ((.[0].inputSchema.properties // {}) | has("credential") | not) and ((.[0].inputSchema.properties // {}) | has("message")) and ((.[0].inputSchema.properties // {}) | has("dry_run")) and ((.[0].inputSchema.properties.operation.enum | index("commit")) != null))' <<<"$GIT_TOOLS" >/dev/null
 checkpoint "verify-git-runner-denies-bash"
 GIT_BASH="$(mcp_call 8788 '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"bash","arguments":{"command":"id"}}}')"
 jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH" >/dev/null
@@ -94,7 +94,7 @@ PUSH="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:10,method:"tools/call",params
 jq -e '.result.isError != true and .error == null' <<<"$PUSH" >/dev/null
 ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PUSH"
 checkpoint "verify-fetch-pull-branch-log"
-for op in fetch pull branch log; do
+for op in fetch pull checkout log; do
   RESPONSE="$(mcp_call 8788 "$(jq -cn --arg op "$op" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"git_execute",arguments:{operation:$op,account:"personal",path:"public-shared",ref:"main"}}}')")"
   jq -e '.result.isError != true and .error == null' <<<"$RESPONSE" >/dev/null
   ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$RESPONSE"

@@ -34,7 +34,7 @@ var accountAliasRE = regexp.MustCompile("^[A-Za-z0-9_.-]{1,64}$")
 func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	op := strings.TrimSpace(val(a, "operation"))
 	account := strings.TrimSpace(val(a, "account"))
-	allowed := map[string]bool{"clone": true, "fetch": true, "pull": true, "push": true, "status": true, "branch": true, "log": true, "commit": true}
+	allowed := map[string]bool{"clone": true, "fetch": true, "pull": true, "push": true, "status": true, "branch": true, "checkout": true, "log": true, "commit": true}
 	if !allowed[op] {
 		return fail("unsupported Git operation")
 	}
@@ -178,11 +178,12 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		case "status":
 			args = append(args, "status", "--short", "--branch")
 		case "branch":
+			args = append(args, "branch", "--list")
+		case "checkout":
 			if ref == "" {
-				args = append(args, "branch", "--list")
-			} else {
-				args = append(args, "checkout", "-b", ref)
+				return fail("checkout requires an existing branch ref")
 			}
+			args = append(args, "checkout", ref)
 		case "log":
 			args = append(args, "log", "-10", "--oneline", "--decorate")
 		case "commit":

@@ -12,7 +12,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
       AZURE_DEVOPS_ORG_URL: ${{ secrets.AZURE_DEVOPS_ORG_URL }}
@@ -310,3 +310,15 @@ jobs:
             print(json.dumps({"probe":"C4","result":"NOT_RUN_READ_ONLY"}))
           print(json.dumps({"probe":"E2","result":"PARTIAL","detail":"203 and HTML login responses are classified as blocked; invalid PAT is not intentionally tested"}))
           PY
+      - name: Live Azure DevOps runner E2E against Issue 68 preview
+        env:
+          PREVIEW_DOMAIN: https://github-mcp-proxy-issue68-preview.localmcpcoder-5b1b15.workers.dev
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$MCP_TOKEN"
+          echo "::add-mask::$MCP_TOKEN"
+          git clone --depth 1 --branch feature/issue-68-azure-devops-runner https://github.com/o258p0515/cf-worker-proxy-mcp.git proxy-e2e
+          node --check proxy-e2e/scripts/azure-preview-e2e.mjs
+          node proxy-e2e/scripts/azure-preview-e2e.mjs
+  324

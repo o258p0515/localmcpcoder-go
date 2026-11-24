@@ -125,6 +125,7 @@ jobs:
                 print(json.dumps({"probe":label,"method":method,"path":path,"http_status":code,"content_type":ct,"result":"PASS" if 200<=code<300 else "FAIL","response":summary}))
                 return code,doc
               try:
+                zero="0000000000000000000000000000000000000000"
                 # Clean up resources left by an interrupted earlier probe before creating this run's assets.
                 _,old_pipelines=api("PIPELINE-stale-list","GET",f"/{pname}/_apis/pipelines")
                 for stale in (old_pipelines.get("value",[]) if isinstance(old_pipelines,dict) else []):

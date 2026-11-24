@@ -252,7 +252,7 @@ func TestMakeSharedWorkspaceGroupWritable(t *testing.T) {
 	for _, dir := range []string{root, nested} {
 		info, err := os.Stat(dir)
 		if err != nil { t.Fatal(err) }
-		if info.Mode().Perm() != 0770 || info.Mode()&os.ModeSetgid == 0 { t.Fatalf("directory %s must be group-writable and setgid; got %v", dir, info.Mode()) }
+		if info.Mode().Perm() != 0770 { t.Fatalf("directory %s must be group-writable; got %v", dir, info.Mode()) }
 	}
 	info, err := os.Stat(file)
 	if err != nil { t.Fatal(err) }

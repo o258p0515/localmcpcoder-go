@@ -1,5 +1,6 @@
 import type { Env, RunnerInfo } from "./types";
 import { injectRunnerArguments, stripRunnerArguments } from "./schema-injector";
+import { runnerToolCatalog } from "./tool-catalog";
 
 const json = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
 const error = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
@@ -38,6 +39,46 @@ function metaTools() {
   ];
 }
 
+async function listRunnerTools(env: Env): Promise<any[]> {
+  // tools/list is a catalog operation, not a routed tool call: inspect every
+  // online runner without requiring a session selection or a unique runner.
+  let runners: RunnerInfo[] = [];
+  try {
+    runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
+  } catch {
+    return runnerToolCatalog;
+  }
+  const online = runners.filter((runner) => runner.status === "online");
+  if (online.length === 0) return runnerToolCatalog;
+
+  const catalogs = await Promise.all(online.map(async (runner) => {
+    try {
+      // A stalled runner must not prevent the Hub's static catalog from being
+      // returned. The underlying request may finish later, but its result is
+      // intentionally ignored after this bounded discovery window.
+      const payload = await Promise.race([
+        runnerRequest(env, runner.runner_id, "dispatch", {
+          payload: { jsonrpc: "2.0", id: "hub-tools-list", method: "tools/list", params: {} },
+          tool_name: "tools/list"
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("runner tools/list timed out")), 5_000))
+      ]);
+      return payload?.result?.tools ?? [];
+    } catch {
+      return [];
+    }
+  }));
+
+  const merged = new Map<string, any>();
+  for (const tool of runnerToolCatalog) merged.set(tool.name, tool);
+  for (const tools of catalogs) {
+    for (const tool of injectRunnerArguments(tools)) {
+      if (tool && typeof tool.name === "string" && tool.name) merged.set(tool.name, tool);
+    }
+  }
+  return [...merged.values()];
+}
+
 async function resolveRunner(env: Env, session: string, headerId: string, argumentId?: string): Promise<{ runner?: RunnerInfo; runners: RunnerInfo[]; error?: string }> {
   const runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
   const online = runners.filter((r) => r.status === "online");
@@ -65,14 +106,8 @@ async function processRequest(request: Request, env: Env, session: string, rpc: 
   if (method === "ping") return json(id, {});
   if (method.startsWith("notifications/")) return null;
   if (method === "tools/list") {
-    const selected = await resolveRunner(env, session, request.headers.get("X-Runner-Id") ?? "");
-    if (!selected.runner) return json(id, { tools: metaTools() });
-    const payload = await runnerRequest(env, selected.runner.runner_id, "dispatch", {
-      payload: { jsonrpc: "2.0", id: "hub-tools-list", method: "tools/list", params: {} },
-      tool_name: "tools/list"
-    });
-    const tools = payload?.result?.tools ?? [];
-    return json(id, { tools: [...metaTools(), ...injectRunnerArguments(tools)] });
+    const tools = await listRunnerTools(env);
+    return json(id, { tools: [...metaTools(), ...tools] });
   }
   if (method !== "tools/call") return error(id, -32601, "Method not found");
   const name = String(params.name ?? "");
@@ -129,14 +164,14 @@ export async function handleMcp(request: Request, env: Env, session: string): Pr
       start(controller) {
         const encoder = new TextEncoder();
         const keepalive = setInterval(() => {
-          try { controller.enqueue(encoder.encode(": keepalive\n\n")); } catch { clearInterval(keepalive); }
+          try { controller.enqueue(encoder.encode(": keepalive\\n\\n")); } catch { clearInterval(keepalive); }
         }, 20_000);
         void result.then((message) => {
-          if (message !== null) controller.enqueue(encoder.encode("event: message\ndata: " + JSON.stringify(message) + "\n\n"));
+          if (message !== null) controller.enqueue(encoder.encode("event: message\\ndata: " + JSON.stringify(message) + "\\n\\n"));
           clearInterval(keepalive);
           controller.close();
         }).catch((e) => {
-          controller.enqueue(encoder.encode("event: message\ndata: " + JSON.stringify(error(rpc.id, -32603, String(e))) + "\n\n"));
+          controller.enqueue(encoder.encode("event: message\\ndata: " + JSON.stringify(error(rpc.id, -32603, String(e))) + "\\n\\n"));
           clearInterval(keepalive);
           controller.close();
         });

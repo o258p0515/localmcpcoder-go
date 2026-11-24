@@ -109,6 +109,13 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		return fail("commit requires a message of 1 to 512 characters")
 	}
 	dryRun, _ := a["dry_run"].(bool)
+	if op != "commit" && a["paths"] != nil {
+		return fail("paths is only supported for commit")
+	}
+	commitPaths, pathErr := validateGitCommitPaths(repoPath, a["paths"])
+	if pathErr != nil {
+		return fail(pathErr.Error())
+	}
 
 	needsCredential := op == "clone" || op == "fetch" || op == "pull" || op == "push"
 	var credential gitCredential
@@ -184,7 +191,12 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		case "log":
 			args = append(args, "log", "-10", "--oneline", "--decorate")
 		case "commit":
-			args = append(args, "add", "-A", "--", ".")
+			if len(commitPaths) == 0 {
+				args = append(args, "add", "-A", "--", ".")
+			} else {
+				args = append(args, "add", "--")
+				args = append(args, commitPaths...)
+			}
 		}
 	}
 
@@ -246,6 +258,38 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	return ok(output + "\n[exit code: 0]")
 }
 
+func validateGitCommitPaths(repoPath string, raw any) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 || len(items) > 100 {
+		return nil, errors.New("paths must contain between 1 and 100 relative paths")
+	}
+	cleaned := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		value, ok := item.(string)
+		if !ok || strings.TrimSpace(value) == "" || strings.ContainsRune(value, '\\x00') || filepath.IsAbs(value) {
+			return nil, errors.New("each commit path must be a non-empty relative path")
+		}
+		path := filepath.Clean(value)
+		rel, err := filepath.Rel(repoPath, filepath.Join(repoPath, path))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || path == "." && len(items) > 1 {
+			return nil, errors.New("commit paths must stay inside the selected repository")
+		}
+		if path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) || path == ".git" || strings.HasPrefix(path, ".git"+string(filepath.Separator)) {
+			return nil, errors.New("commit paths cannot target parent directories or Git metadata")
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		cleaned = append(cleaned, path)
+	}
+	return cleaned, nil
+}
+
 func gitBaseArgs(hooksDir string) []string {
 	return []string{"-c", "credential.helper=", "-c", "core.hooksPath=" + hooksDir,
 		"-c", "http.extraHeader=", "-c", "http.https://github.com/.extraHeader=",
@@ -258,7 +302,7 @@ func makeSharedWorkspaceGroupWritable(root string) error {
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil { return err }
 		if info.Mode()&os.ModeSymlink != 0 { return nil }
-		if info.IsDir() { return os.Chmod(path, 02770) }
+		if info.IsDir() { return os.Chmod(path, 03770) }
 		perms := (info.Mode().Perm() & 0700) | 0060
 		if info.Mode().Perm()&0100 != 0 { perms |= 0010 }
 		return os.Chmod(path, perms)

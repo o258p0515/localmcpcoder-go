@@ -23,7 +23,9 @@ cleanup() {
   if [ -n "$GIT_PID" ]; then sudo kill "$GIT_PID" 2>/dev/null || true; fi
   sudo pkill -u mcp-agent -f "$BIN" 2>/dev/null || true
   sudo pkill -u mcp-git -f "$BIN" 2>/dev/null || true
-  sudo pkill -u mcp-git -f '^sleep 90
+  sudo pkill -u mcp-git -f '^sleep 90$' 2>/dev/null || true
+  sudo rm -rf /tmp/issue23-git-private
+}
 trap cleanup EXIT
 checkpoint "install-executor-binary-and-create-isolated-users"
 sudo install -m 0755 "$RUNNER_TEMP/localmcpcoder-git-executor" "$BIN"
@@ -141,7 +143,6 @@ echo "issue23 paired-runner smoke: PASS (dedicated-token/private clone, Git-only
   sudo rm -rf /tmp/issue23-git-private 2>/dev/null || true
   return "$original_status"
 }
-trap cleanup EXIT
 checkpoint "install-executor-binary-and-create-isolated-users"
 sudo install -m 0755 "$RUNNER_TEMP/localmcpcoder-git-executor" "$BIN"
 sudo groupadd --system mcp-workspace 2>/dev/null || true

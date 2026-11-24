@@ -6,8 +6,7 @@ checkpoint() { CURRENT_CHECKPOINT="$1"; echo "::notice title=Issue23 smoke check
 checkpoint "validate-required-environment"
 test -n "$MCP_TOKEN"
 test -n "$GIT_CREDENTIAL_URL"
-test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"
-test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+test -n "$GIT_EXECUTOR_TOKEN"
 test -n "$RUNNER_TEMP"
 BIN="/tmp/localmcpcoder-git-executor-$GITHUB_RUN_ID"
 ROOT="/tmp/issue23-shared-workspace-$GITHUB_RUN_ID"
@@ -36,14 +35,9 @@ sudo install -d -o "$(id -un)" -g mcp-workspace -m 2770 "$ROOT"
 printf 'MCP_SHARED_ROOT=%s\\n' "$ROOT" >> "$GITHUB_ENV"
 umask 0002
 checkpoint "start-agent-and-git-mcp-servers"
-sudo -u mcp-agent env -i PATH="$PATH" HOME=/home/mcp-agent MCP_TOKEN="$MCP_TOKEN" \
-  "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
+sudo --preserve-env=MCP_TOKEN -u mcp-agent "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
-sudo -u mcp-git env -i PATH="$PATH" HOME=/home/mcp-git MCP_TOKEN="$MCP_TOKEN" \
-  GIT_CREDENTIAL_URL="$GIT_CREDENTIAL_URL" MCP_TOOL_PROFILE=git-executor \
-  ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL" \
-  ACTIONS_ID_TOKEN_REQUEST_TOKEN="$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-  "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
+sudo --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,MCP_TOOL_PROFILE,GIT_EXECUTOR_TOKEN -u mcp-git "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
 GIT_PID=$!
 wait_http() {
   local port="$1"
@@ -72,7 +66,7 @@ jq -e '.result.tools | (length == 1 and .[0].name == "git_execute" and ((.[0].in
 checkpoint "verify-git-runner-denies-bash"
 GIT_BASH="$(mcp_call 8788 '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"bash","arguments":{"command":"id"}}}')"
 jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH" >/dev/null
-checkpoint "private-clone-using-live-oidc-credential"
+checkpoint "private-clone-using-dedicated-executor-token"
 PRIVATE_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/kiem-thu.git",destination:"private-empty"}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_CLONE" >/dev/null
 ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PRIVATE_CLONE"
@@ -106,7 +100,7 @@ SENTINEL_PID=$!
 sleep 1
 GIT_SERVER_PID="$(pgrep -u mcp-git -f "$BIN" | head -n1)"
 if [ -z "$GIT_SERVER_PID" ]; then echo "cannot locate isolated Git executor process" >&2; exit 1; fi
-ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\\\000' '\\\\n' </proc/$GIT_SERVER_PID/environ 2>/dev/null | grep -q ACTIONS_ID_TOKEN_REQUEST_TOKEN; then exit 42; fi; if env | grep -q '^ACTIONS_ID_TOKEN_REQUEST_TOKEN='; then exit 43; fi; if ls /home/mcp-git/.localmcp-git/repos >/dev/null 2>&1; then exit 44; fi; if git -C public-shared rev-parse --git-dir >/dev/null 2>&1; then exit 45; fi; echo isolation-ok"
+ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\\\000' '\\\\n' </proc/$GIT_SERVER_PID/environ 2>/dev/null | grep -q GIT_EXECUTOR_TOKEN; then exit 42; fi; if env | grep -q '^ACTIONS_ID_TOKEN_REQUEST_TOKEN='; then exit 43; fi; if ls /home/mcp-git/.localmcp-git/repos >/dev/null 2>&1; then exit 44; fi; if git -C public-shared rev-parse --git-dir >/dev/null 2>&1; then exit 45; fi; echo isolation-ok"
 ISOLATION="$(mcp_call 8787 "$(jq -cn --arg command "$ISOLATION_COMMAND" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$ISOLATION" >/dev/null
 jq -r '.result.content[]?.text // empty' <<<"$ISOLATION" | grep -q 'isolation-ok'
@@ -120,4 +114,4 @@ if sudo find /tmp -maxdepth 1 -type d -name 'localmcp-git-auth-*' -print -quit |
   echo "temporary Git credential directory was not cleaned" >&2
   exit 1
 fi
-echo "issue23 paired-runner smoke: PASS (live OIDC/private clone, Git-only catalog, shared workspace, fetch/pull/push auth, UID isolation, temp cleanup)"
+echo "issue23 paired-runner smoke: PASS (dedicated-token/private clone, Git-only catalog, shared workspace, fetch/pull/push auth, UID isolation, temp cleanup)"

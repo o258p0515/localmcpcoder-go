@@ -83,18 +83,16 @@ func TestGitExecuteRejectsPathTraversalBeforeCredentialRequest(t *testing.T) {
 		t.Fatal("expected path traversal error")
 	}
 }
-func TestGitExecuteRejectsMissingOIDCWithoutLeakingSecrets(t *testing.T) {
-	oldURL, oldToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_URL")
-	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-	defer os.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", oldURL)
-	defer os.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", oldToken)
+func TestGitExecuteRejectsMissingExecutorTokenWithoutLeakingSecrets(t *testing.T) {
+	oldToken := os.Getenv("GIT_EXECUTOR_TOKEN")
+	_ = os.Unsetenv("GIT_EXECUTOR_TOKEN")
+	defer os.Setenv("GIT_EXECUTOR_TOKEN", oldToken)
 	r := gitProfileRegistry(t)
 	res := r.Call(context.Background(), "git_execute", map[string]any{"operation": "clone", "account": "personal", "repository": "https://github.com/owner/repo.git", "destination": "repo"})
 	if !res.IsError {
-		t.Fatal("expected OIDC failure")
+		t.Fatal("expected executor-token failure")
 	}
-	if got := res.Content[0]["text"]; got != "Error: Git credential provider unavailable: GitHub Actions OIDC is not available" {
+	if got := res.Content[0]["text"]; got != "Error: Git credential provider unavailable: dedicated Git executor token is not configured" {
 		t.Fatalf("unexpected error: %s", got)
 	}
 }

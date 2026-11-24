@@ -210,7 +210,7 @@ func TestGitSafeEnvRemovesDedicatedExecutorToken(t *testing.T) {
 func TestGitSubcommandsWorkWhenInheritedCwdIsInaccessible(t *testing.T) {
 	oldwd, err := os.Getwd()
 	if err != nil { t.Fatal(err) }
-	defer func() { _ = os.Chdir(oldwd) }
+	defer func() { _ = os.Chdir(oldwd) }()
 
 	base := t.TempDir()
 	gitDir := filepath.Join(base, "private.git")

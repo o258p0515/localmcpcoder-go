@@ -93,7 +93,7 @@ jobs:
             stale=groups.get("value",[]) if isinstance(groups,dict) else []
             for item in stale:
               if str(item.get("name","")).startswith("LocalMCP-Issue69-Probe-"):
-                mutate_url=base+f"/{item['id']}?api-version=7.1-preview.2"
+                mutate_url=org+f"/_apis/distributedtask/variablegroups/{item['id']}?projectIds={ps[0]['id']}&api-version=7.1"
                 req=urllib.request.Request(mutate_url,headers=h,method="DELETE")
                 try:
                   with urllib.request.urlopen(req,timeout=30) as rr: print(json.dumps({"probe":"B2-stale-cleanup","http_status":rr.status,"result":"PASS"}))
@@ -117,7 +117,7 @@ jobs:
                   body["id"]=gid
                   mutate("B2-update","PUT",base+f"/{gid}?api-version=7.1",body)
             finally:
-              if gid: mutate("B2-cleanup-delete","DELETE",base+f"/{gid}?api-version=7.1-preview.2")
+              if gid: mutate("B2-cleanup-delete","DELETE",org+f"/_apis/distributedtask/variablegroups/{gid}?projectIds={ps[0]['id']}&api-version=7.1")
           else: print(json.dumps({"probe":"B2","result":"NOT_RUN_READ_ONLY"}))
           if ps and not (pipes.get("value",[]) if isinstance(pipes,dict) else []):
             print(json.dumps({"probe":"C3","result":"BLOCKED_NO_PIPELINE"}))

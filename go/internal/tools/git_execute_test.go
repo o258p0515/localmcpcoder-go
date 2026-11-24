@@ -7,7 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"\n\t"strconv"
+	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/o258p0515/localmcpcoder-go/go/internal/config"
@@ -67,7 +68,10 @@ func TestGitExecutorSchemaHasNoCredentialFields(t *testing.T) {
 	if !foundCheckout {
 		t.Fatal("checkout operation missing from schema")
 	}
-	if paths, ok := props["paths"].(map[string]any); !ok || paths["type"] != "array" || paths["maxItems"] != 100 {\n\t\tt.Fatal("optional scoped commit paths missing from schema")\n\t}\n\tif _, ok := props["dry_run"]; !ok {
+	if paths, ok := props["paths"].(map[string]any); !ok || paths["type"] != "array" || paths["maxItems"] != 100 {
+		t.Fatal("optional scoped commit paths missing from schema")
+	}
+	if _, ok := props["dry_run"]; !ok {
 		t.Fatal("dry_run option missing from schema")
 	}
 }

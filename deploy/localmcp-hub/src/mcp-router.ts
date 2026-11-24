@@ -129,12 +129,16 @@ async function resolveRunner(env: Env, session: string, headerId: string, argume
   // even when the session's default runner is the other half of the pair.
   if (toolName === "git_execute") {
     if (hasTag(selected, "git") && hasTag(selected, "isolated")) return { runner: selected, runners };
+    const pairedGit = pairedRunner(selected, gitRunners);
+    if (pairedGit) return { runner: pairedGit, runners };
     if (gitRunners.length === 1) return { runner: gitRunners[0], runners };
     if (gitRunners.length > 1) return { runners, error: "Multiple isolated Git runners are online. Pass runner_id to select one." };
     return { runners, error: "No online isolated Git executor runner. Start a runner tagged git,isolated, then call list_runners." };
   }
 
   if (hasTag(selected, "agent")) return { runner: selected, runners };
+  const pairedAgent = pairedRunner(selected, agentRunners);
+  if (pairedAgent) return { runner: pairedAgent, runners };
   if (agentRunners.length === 1) return { runner: agentRunners[0], runners };
   if (agentRunners.length > 1) return { runners, error: "Multiple Agent runners are online. Pass runner_id to select one." };
   if (selected && !hasTag(selected, "git")) return { runner: selected, runners };

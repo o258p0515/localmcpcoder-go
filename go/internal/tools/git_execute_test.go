@@ -185,7 +185,7 @@ func TestGitExecuteRejectsGitMetadataInSharedWorkspace(t *testing.T) {
 }
 
 func TestGitOutputRedactsCredentialOnErrorAndSuccess(t *testing.T) {
-	secret := "github_pat_sensitive_example"
+	secret := "ghp_sensitive+token/with=reserved"
 	got := redactCredential("fatal: remote rejected token="+secret+" url="+url.QueryEscape(secret)+" b64="+base64.StdEncoding.EncodeToString([]byte(secret)), secret)
 	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
 		t.Fatalf("credential not redacted: %s", got)

@@ -97,28 +97,15 @@ jobs:
               run_tag=os.environ.get("GITHUB_RUN_ID","manual")
               branch="refs/heads/issue69-probe-"+run_tag
               file_path="/.azure-pipelines/issue69-probe.yml"
-              yaml_text="\n".join([
-                "pool:",
-                "  vmImage: ubuntu-latest",
-                "variables:",
-                "  sleepSeconds: 0",
-                "steps:",
-                "- bash: |",
-                "    echo 'ISSUE69_PROBE_START'",
-                "    echo \"Agent OS: $(Agent.OS)\"",
-                "    echo \"Agent name: $(Agent.Name)\"",
-                "    echo \"Build ID: $(Build.BuildId)\"",
-                "    echo \"Repository: $(Build.Repository.Name)\"",
-                "    echo 'ISSUE69_PROBE_LOG_MARKER_001'",
-                "    echo 'ISSUE69_PROBE_LOG_MARKER_002'",
-                "    sleep \"$(sleepSeconds)\"",
-                "    echo 'ISSUE69_PROBE_END'",
-                "  displayName: Issue 69 API probe",
-              ])+"\n"
-              pipeline_id=None
+              yaml_files={
+                "/.azure-pipelines/issue69-linux.yml": "\n".join(["pool:","  vmImage: ubuntu-latest","steps:","- bash: |","    echo 'ISSUE69_LINUX_START'","    echo 'ISSUE69_LOG_MARKER_001'","    echo 'ISSUE69_LOG_MARKER_002'","    echo 'ISSUE69_LINUX_END'","  displayName: Issue 69 Linux probe"])+"\n",
+                "/.azure-pipelines/issue69-live.yml": "\n".join(["pool:","  vmImage: ubuntu-latest","steps:","- bash: |","    echo 'ISSUE69_LIVE_START'","    echo 'ISSUE69_LIVE_LOG_MARKER_001'","    sleep 150","    echo 'ISSUE69_LIVE_END'","  displayName: Issue 69 live log and cancellation probe"])+"\n",
+                "/.azure-pipelines/issue69-windows.yml": "\n".join(["pool:","  vmImage: windows-latest","steps:","- powershell: |","    Write-Host 'ISSUE69_WINDOWS_START'","    Write-Host 'ISSUE69_WINDOWS_LOG_MARKER_001'","    Write-Host 'ISSUE69_WINDOWS_END'","  displayName: Issue 69 Windows probe"])+"\n"
+              }
+              pipeline_defs=[]
               branch_created=False
-              def api(label,method,path,payload=None,api_version="7.1",accept="application/json"):
-                url=org+path+("?" if "?" not in path else "&")+"api-version="+api_version
+              def api(label,method,path,payload=None,accept="application/json"):
+                url=org+path+("?" if "?" not in path else "&")+"api-version=7.1"
                 data=None if payload is None else json.dumps(payload).encode()
                 req=urllib.request.Request(url,data=data,headers={**h,"Accept":accept,"Content-Type":"application/json"},method=method)
                 try:
@@ -126,90 +113,80 @@ jobs:
                 except urllib.error.HTTPError as ee: code=ee.code; raw=ee.read(); ct=ee.headers.get("Content-Type","")
                 try: doc=json.loads(raw) if raw else {}
                 except: doc={"preview":raw[:500].decode("utf8","replace")}
-                print(json.dumps({"probe":label,"method":method,"path":path,"http_status":code,"content_type":ct,"result":"PASS" if 200<=code<300 else "FAIL","response":({k:v for k,v in doc.items() if k in ("id","name","state","result","status","url","revision","message","typeKey","count","value")} if isinstance(doc,dict) else str(doc)[:300])}))
+                summary={k:v for k,v in doc.items() if k in ("id","name","state","result","status","url","revision","message","typeKey","count","value")} if isinstance(doc,dict) else str(doc)[:500]
+                if isinstance(summary,dict) and isinstance(summary.get("value"),list):
+                  summary["count"]=len(summary["value"])
+                  summary["value"]=[{k:v for k,v in x.items() if k in ("id","name","state","result","status","lineCount","createdOn","lastChangedOn")} for x in summary["value"][:8] if isinstance(x,dict)]
+                print(json.dumps({"probe":label,"method":method,"path":path,"http_status":code,"content_type":ct,"result":"PASS" if 200<=code<300 else "FAIL","response":summary}))
                 return code,doc
               try:
-                # Resolve main commit and create a dedicated branch containing only the probe YAML.
                 _,refs=api("PIPELINE-branch-source","GET",f"/{pname}/_apis/git/repositories/{rid}/refs?filter=heads/main")
                 ref_items=refs.get("value",[]) if isinstance(refs,dict) else []
                 main_ref=next((x for x in ref_items if x.get("name")=="refs/heads/main"),None)
                 zero="0000000000000000000000000000000000000000"
                 parents=[main_ref["objectId"]] if main_ref else []
-                push={"refUpdates":[{"name":branch,"oldObjectId":zero}],"commits":[{"comment":"Temporary Issue 69 Azure pipeline probe","parents":parents,"changes":[{"changeType":"add","item":{"path":file_path},"newContent":{"content":yaml_text,"contentType":"rawtext"}}]}]}
-                code,push_result=api("PIPELINE-create-probe-branch","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",push)
+                changes=[{"changeType":"add","item":{"path":path},"newContent":{"content:":content,"contentType":"rawtext"}} for path,content in yaml_files.items()]
+                for c in changes: c["newContent"]["content"]=c["newContent"].pop("content:")
+                push={"refUpdates":[{"name":branch,"oldObjectId":zero}],"commits":[{"comment":"Temporary Issue 69 pipeline probes","parents":parents,"changes":changes}]}
+                code,_=api("PIPELINE-create-probe-branch","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",push)
                 branch_created=200<=code<300
                 if branch_created:
-                  cfg={"name":"LocalMCP-Issue69-Probe-"+run_tag,"folder":"\\LocalMCP-Issue69-Probe","configuration":{"type":"yaml","path":file_path,"repository":{"id":rid,"name":repo["name"],"type":"azureReposGit"}}}
-                  code,pipe=api("PIPELINE-create-definition","POST",f"/{pname}/_apis/pipelines",cfg)
-                  if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"):
-                    pipeline_id=pipe["id"]
-                    # Successful short run: verify create/queue, build status, timeline, and final log formats.
-                    run_body={"resources":{"repositories":{"self":{"repository":{"id":rid,"name":repo["name"],"type":"azureReposGit"},"refName":branch}}},"variables":{"sleepSeconds":{"value":"0"}}}
-                    code,run=api("C3-linux-queue","POST",f"/{pname}/_apis/pipelines/{pipeline_id}/runs",run_body)
+                  for path in yaml_files:
+                    pname_def="LocalMCP-Issue69-"+path.rsplit("/",1)[-1].replace(".yml","")+"-"+run_tag
+                    cfg={"name":pname_def,"folder":"\\LocalMCP-Issue69-Probe","configuration":{"type":"yaml","path":path,"repository":{"id":rid,"name":repo["name"],"type":"azureReposGit"}}}
+                    code,pipe=api("PIPELINE-create-"+path.rsplit("/",1)[-1],"POST",f"/{pname}/_apis/pipelines",cfg)
+                    if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"): pipeline_defs.append({"id":pipe["id"],"name":pname_def,"path":path})
+                  def queue_and_poll(label,definition,live=False,windows=False):
+                    body={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}
+                    code,run=api(label+"-queue","POST",f"/{pname}/_apis/pipelines/{definition['id']}/runs",body)
                     run_id=run.get("id") if isinstance(run,dict) else None
-                    if 200<=code<300 and run_id:
-                      deadline=time.time()+240
-                      build=None
-                      while time.time()<deadline:
-                        _,build=api("C2-poll-build","GET",f"/{pname}/_apis/build/builds/{run_id}")
-                        if isinstance(build,dict) and build.get("status")=="completed": break
-                        time.sleep(8)
-                      if isinstance(build,dict) and build.get("status")=="completed":
-                        api("D1-final-timeline","GET",f"/{pname}/_apis/build/builds/{run_id}/timeline")
-                        _,logs=api("D2-final-logs","GET",f"/{pname}/_apis/build/builds/{run_id}/logs")
-                        log_items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
-                        if log_items:
-                          lid=log_items[0]["id"]
-                          api("D3-final-text","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
-                          api("D3-final-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
-                        else: print(json.dumps({"probe":"D3-final","result":"BLOCKED_NO_LOG_RECORD","response_keys":list(logs) if isinstance(logs,dict) else []}))
-                      else: print(json.dumps({"probe":"C2-poll","result":"TIMEOUT_OR_NOT_COMPLETED","build":{k:build.get(k) for k in ("id","status","result")} if isinstance(build,dict) else None}))
-                    else: print(json.dumps({"probe":"C3-linux-queue","result":"FAIL_OR_NO_RUN_ID"}))
-                    # Long run: inspect live timeline/logs, then cancel using Build API.
-                    live_body={"resources":{"repositories":{"self":{"repository":{"type":"azureReposGit"},"refName":branch}}},"variables":{"sleepSeconds":{"value":"150"}}}
-                    code,live=api("C3-live-queue","POST",f"/{pname}/_apis/pipelines/{pipeline_id}/runs",live_body)
-                    live_id=live.get("id") if isinstance(live,dict) else None
-                    if 200<=code<300 and live_id:
-                      live_build=None
-                      for _ in range(18):
-                        _,live_build=api("C2-live-status","GET",f"/{pname}/_apis/build/builds/{live_id}")
-                        if isinstance(live_build,dict) and live_build.get("status")=="inProgress": break
-                        if isinstance(live_build,dict) and live_build.get("status")=="completed": break
+                    if not (200<=code<300 and run_id):
+                      print(json.dumps({"probe":label,"result":"QUEUE_FAILED"})); return None
+                    deadline=time.time()+240
+                    current=None
+                    for _ in range(40):
+                      _,current=api(label+"-status","GET",f"/{pname}/_apis/build/builds/{run_id}")
+                      if isinstance(current,dict) and current.get("status")=="completed": break
+                      if live and isinstance(current,dict) and current.get("status")=="inProgress": break
+                      time.sleep(6)
+                    if live and isinstance(current,dict) and current.get("status")=="inProgress":
+                      api("D1-live-timeline","GET",f"/{pname}/_apis/build/builds/{run_id}/timeline")
+                      _,logs=api("D2-live-logs","GET",f"/{pname}/_apis/build/builds/{run_id}/logs")
+                      items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
+                      if items:
+                        lid=items[0]["id"]
+                        api("D3-live-text","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
+                        api("D3-live-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
+                      api("C4-cancel","PATCH",f"/{pname}/_apis/build/builds/{run_id}",{"status":"cancelling"})
+                      for _ in range(12):
+                        _,current=api("C4-poll-cancel","GET",f"/{pname}/_apis/build/builds/{run_id}")
+                        if isinstance(current,dict) and current.get("status")=="completed": break
                         time.sleep(5)
-                      if isinstance(live_build,dict) and live_build.get("status")=="inProgress":
-                        api("D1-live-timeline","GET",f"/{pname}/_apis/build/builds/{live_id}/timeline")
-                        _,live_logs=api("D2-live-logs","GET",f"/{pname}/_apis/build/builds/{live_id}/logs")
-                        live_items=live_logs.get("value",[]) if isinstance(live_logs,dict) else live_logs.get("logs",[]) if isinstance(live_logs,dict) else []
-                        if live_items:
-                          lid=live_items[0]["id"]
-                          api("D3-live-text","GET",f"/{pname}/_apis/build/builds/{live_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
-                          api("D3-live-json","GET",f"/{pname}/_apis/build/builds/{live_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
-                        api("C4-cancel","PATCH",f"/{pname}/_apis/build/builds/{live_id}",{"status":"cancelling"})
-                        for _ in range(12):
-                          _,cancelled=api("C4-poll-cancel","GET",f"/{pname}/_apis/build/builds/{live_id}")
-                          if isinstance(cancelled,dict) and cancelled.get("status")=="completed": break
-                          time.sleep(5)
-                      else: print(json.dumps({"probe":"C4-cancel","result":"BLOCKED_RUN_NEVER_IN_PROGRESS","build":{k:live_build.get(k) for k in ("id","status","result")} if isinstance(live_build,dict) else None}))
-                    else: print(json.dumps({"probe":"C3-live-queue","result":"FAIL_OR_NO_RUN_ID"}))
-                    # Exercise Windows hosted image if quota allows.
-                    win_body={"resources":{"repositories":{"self":{"repository":{"type":"azureReposGit"},"refName":branch}}},"variables":{"sleepSeconds":{"value":"0"}}}
-                    win_code,win=api("C3-windows-queue","POST",f"/{pname}/_apis/pipelines/{pipeline_id}/runs",win_body)
-                    win_id=win.get("id") if isinstance(win,dict) else None
-                    if 200<=win_code<300 and win_id:
-                      for _ in range(30):
-                        _,wb=api("C2-windows-status","GET",f"/{pname}/_apis/build/builds/{win_id}")
-                        if isinstance(wb,dict) and wb.get("status")=="completed": break
-                        time.sleep(6)
-                    # Delete temporary pipeline definition after collecting results.
-                    api("PIPELINE-delete-definition","DELETE",f"/{pname}/_apis/build/definitions/{pipeline_id}")
-                  else: print(json.dumps({"probe":"PIPELINE-create-definition","result":"FAIL","detail":"See HTTP response above"}))
+                    elif isinstance(current,dict) and current.get("status")=="completed":
+                      api("D1-final-timeline","GET",f"/{pname}/_apis/build/builds/{run_id}/timeline")
+                      _,logs=api("D2-final-logs","GET",f"/{pname}/_apis/build/builds/{run_id}/logs")
+                      items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
+                      if items:
+                        lid=items[0]["id"]
+                        api("D3-final-text","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
+                        api("D3-final-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
+                    print(json.dumps({"probe":label+"-summary","run_id":run_id,"status":current.get("status") if isinstance(current,dict) else None,"result":current.get("result") if isinstance(current,dict) else None}))
+                    return run_id
+                  linux=next((x for x in pipeline_defs if "linux.yml" in x["path"]),None)
+                  live=next((x for x in pipeline_defs if "live.yml" in x["path"]),None)
+                  win=next((x for x in pipeline_defs if "windows.yml" in x["path"]),None)
+                  if linux: queue_and_poll("C3-linux",linux)
+                  if live: queue_and_poll("C3-live",live,live=True)
+                  if win: queue_and_poll("C3-windows",win,windows=True)
               finally:
-                # Delete the temporary Azure Repo branch; never touch main.
+                for definition in pipeline_defs:
+                  api("PIPELINE-delete-"+str(definition["id"]),"DELETE",f"/{pname}/_apis/build/definitions/{definition['id']}")
                 if branch_created:
                   _,branch_refs=api("PIPELINE-cleanup-read-branch","GET",f"/{pname}/_apis/git/repositories/{rid}/refs?filter=heads/issue69-probe-{run_tag}")
                   found=next((x for x in (branch_refs.get("value",[]) if isinstance(branch_refs,dict) else []) if x.get("name")==branch),None)
                   if found:
                     api("PIPELINE-cleanup-delete-branch","POST",f"/{pname}/_apis/git/repositories/{rid}/refs",[{"name":branch,"oldObjectId":found["objectId"],"newObjectId":zero}])
+
           else: print(json.dumps({"probe":"PIPELINE-BOOTSTRAP","result":"NOT_RUN_READ_ONLY"}))
           if os.environ.get("ALLOW_MUTATING_PROBES","false").lower()=="true" and ps:
             import uuid

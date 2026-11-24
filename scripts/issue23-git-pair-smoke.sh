@@ -41,7 +41,7 @@ umask 0007
 checkpoint "start-agent-and-git-mcp-servers"
 sudo -H -g mcp-workspace --preserve-env=MCP_TOKEN -u mcp-agent bash -c 'umask 0007; exec "$@"' _ "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
-sudo -H -g mcp-workspace --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git bash -c 'umask 0007; exec "$@"' _ "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
+sudo -H -g mcp-workspace --preserve-env=MCP_TOKEN,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN,GITHUB_ACTOR,GITHUB_RUN_ID -u mcp-git bash -c 'umask 0007; exec "$@"' _ "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
 GIT_PID=$!
 wait_http() {
   local port="$1"

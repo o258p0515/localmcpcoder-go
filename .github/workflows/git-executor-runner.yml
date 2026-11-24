@@ -60,6 +60,8 @@ jobs:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
           GIT_EXECUTOR_TOKEN: ${{ secrets.GIT_EXECUTOR_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           bash -n ./scripts/issue23-git-pair-smoke.sh
           bash ./scripts/issue23-git-pair-smoke.sh
@@ -72,6 +74,8 @@ jobs:
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
           RUNNER_NAME_PREFIX: ${{ inputs.runner_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -96,7 +100,7 @@ jobs:
             "$BIN" --root "$ROOT" --port 8787 --tunnel hub \
             --hub-urls "$HUB_URLS" --runner-id "$AGENT_ID" --runner-tags "linux,agent,issue23,pair:${RUNNER_NAME_PREFIX}-${GITHUB_RUN_ID}" &
           AGENT_PID=$!
-          sudo -H -g mcp-workspace --preserve-env=MCP_TOKEN,HUB_URLS,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git bash -c 'umask 0007; exec "$@"' _ timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
+          sudo -H -g mcp-workspace --preserve-env=MCP_TOKEN,HUB_URLS,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN,GITHUB_ACTOR,GITHUB_RUN_ID -u mcp-git bash -c 'umask 0007; exec "$@"' _ timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
             "$BIN" --root "$ROOT" --port 8788 --tunnel hub \
             --hub-urls "$HUB_URLS" --runner-id "$GIT_ID" --runner-tags "linux,git,isolated,pair:${RUNNER_NAME_PREFIX}-${GITHUB_RUN_ID}" \
             --tool-profile git-executor &

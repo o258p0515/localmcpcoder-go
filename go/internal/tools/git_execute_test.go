@@ -107,9 +107,9 @@ func TestMakeSharedWorkspaceGroupWritableKeepsBootstrapRootSticky(t *testing.T) 
 	if err := os.WriteFile(file, []byte("x"), 0600); err != nil { t.Fatal(err) }
 	if err := makeSharedWorkspaceGroupWritable(root); err != nil { t.Fatal(err) }
 	rootInfo, err := os.Stat(root); if err != nil { t.Fatal(err) }
-	if rootInfo.Mode().Perm()&07777 != 03770 { t.Fatalf("bootstrap root mode changed: %04o", rootInfo.Mode().Perm()&07777) }
+	if rootInfo.Mode().Perm() != 0770 || rootInfo.Mode()&os.ModeSetgid == 0 || rootInfo.Mode()&os.ModeSticky == 0 { t.Fatalf("bootstrap root mode changed: %v", rootInfo.Mode()) }
 	dirInfo, err := os.Stat(nested); if err != nil { t.Fatal(err) }
-	if dirInfo.Mode().Perm()&02770 != 02770 { t.Fatalf("nested directory not group-writable/setgid: %04o", dirInfo.Mode().Perm()&07777) }
+	if dirInfo.Mode().Perm() != 0770 || dirInfo.Mode()&os.ModeSetgid == 0 { t.Fatalf("nested directory not group-writable/setgid: %v", dirInfo.Mode()) }
 	fileInfo, err := os.Stat(file); if err != nil { t.Fatal(err) }
 	if fileInfo.Mode().Perm()&0060 != 0060 { t.Fatalf("file not group-readable/writable: %04o", fileInfo.Mode().Perm()&07777) }
 }
@@ -314,6 +314,7 @@ func TestGitBaseArgsPreservesSystemCertificateAuthorities(t *testing.T) {
 
 func TestMakeSharedWorkspaceGroupWritable(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Chmod(root, 03770); err != nil { t.Fatal(err) }
 	nested := filepath.Join(root, "nested")
 	if err := os.Mkdir(nested, 0700); err != nil { t.Fatal(err) }
 	file := filepath.Join(nested, "agent-created.txt")

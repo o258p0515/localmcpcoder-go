@@ -35,7 +35,7 @@ jobs:
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
-          GIT_CREDENTIAL_URL: ${{ vars.GIT_CREDENTIAL_URL }}
+          GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
         shell: bash
         run: |
@@ -59,7 +59,7 @@ jobs:
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
-          GIT_CREDENTIAL_URL: ${{ vars.GIT_CREDENTIAL_URL }}
+          GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
           MCP_TOOL_PROFILE: git-executor
           LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name }}
           LOCALMCP_RUNNER_TAGS: linux,git,isolated

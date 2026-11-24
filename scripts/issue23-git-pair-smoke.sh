@@ -34,7 +34,7 @@ sudo useradd --system --create-home --home-dir /home/mcp-agent --shell /usr/sbin
 sudo useradd --system --create-home --home-dir /home/mcp-git --shell /usr/sbin/nologin mcp-git 2>/dev/null || true
 sudo usermod -aG mcp-workspace mcp-agent
 sudo usermod -aG mcp-workspace mcp-git
-sudo install -d -o "$(id -un)" -g mcp-workspace -m 2770 "$ROOT"
+sudo install -d -o "$(id -un)" -g mcp-workspace -m 3770 "$ROOT"\ntest "$(stat -c %a "$ROOT")" = "3770"
 printf 'MCP_SHARED_ROOT=%s\\n' "$ROOT" >> "$GITHUB_ENV"
 umask 0007
 checkpoint "start-agent-and-git-mcp-servers"

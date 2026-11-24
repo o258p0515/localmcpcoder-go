@@ -85,7 +85,7 @@ jobs:
           sudo usermod -aG mcp-workspace mcp-agent
           sudo usermod -aG mcp-workspace mcp-git
           sudo chown "$(id -un)":mcp-workspace "$ROOT"
-          sudo chmod 2770 "$ROOT"
+          sudo chmod 3770 "$ROOT"
           AGENT_ID="$RUNNER_NAME_PREFIX-agent-$GITHUB_RUN_ID"
           GIT_ID="$RUNNER_NAME_PREFIX-git-$GITHUB_RUN_ID"
           echo "Starting Agent runner $AGENT_ID and isolated Git-only runner $GIT_ID on shared workspace $ROOT."

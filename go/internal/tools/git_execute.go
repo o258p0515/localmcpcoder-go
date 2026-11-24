@@ -181,7 +181,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 			if ref == "" {
 				args = append(args, "branch", "--list")
 			} else {
-				args = append(args, "branch", "--create-reflog", ref)
+				args = append(args, "checkout", "-b", ref)
 			}
 		case "log":
 			args = append(args, "log", "-10", "--oneline", "--decorate")
@@ -333,7 +333,7 @@ func (r *Registry) fetchGitCredential(ctx context.Context, account, operation st
 		return gitCredential{}, e
 	}
 	req.Header.Set("Authorization", "Bearer "+requestToken)
-	client := http.Client{Timeout: 15 * time.Second}
+	client := http.Client{Timeout: 15 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, e := client.Do(req)
 	if e != nil {
 		return gitCredential{}, e

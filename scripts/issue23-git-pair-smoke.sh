@@ -66,7 +66,7 @@ checkpoint "verify-agent-and-git-tool-catalogs"
 AGENT_TOOLS="$(mcp_call 8787 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
 GIT_TOOLS="$(mcp_call 8788 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
 jq -e '([.result.tools[]["name"]] | index("bash") != null and index("git_execute") == null)' <<<"$AGENT_TOOLS" >/dev/null
-jq -e '.result.tools | (length == 1 and .[0]["name"] == "git_execute" and ((.[0].inputSchema.properties // {}) | has("token") | not) and ((.[0].inputSchema.properties // {}) | has("credential") | not) and ((.[0].inputSchema.properties // {}) | has("message")) and ((.[0].inputSchema.properties // {}) | has("dry_run")) and ((.[0].inputSchema.properties.operation.enum | index("commit")) != null))' <<<"$GIT_TOOLS" >/dev/null
+jq -e '.result.tools | (length == 1 and .[0]["name"] == "git_execute" and ((.[0].inputSchema.properties // {}) | has("token") | not) and ((.[0].inputSchema.properties // {}) | has("credential") | not) and ((.[0].inputSchema.properties // {}) | has("message")) and ((.[0].inputSchema.properties // {}) | has("paths")) and ((.[0].inputSchema.properties // {}) | has("dry_run")) and ((.[0].inputSchema.properties.operation.enum | index("commit")) != null))' <<<"$GIT_TOOLS" >/dev/null
 checkpoint "verify-git-runner-denies-bash"
 GIT_BASH="$(mcp_call 8788 '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"bash","arguments":{"command":"id"}}}')"
 jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH" >/dev/null

@@ -1,1 +1,87 @@
-successfully downloaded text file (SHA: 681aeca6e3cf1c6431149488c60de8fbcaf8f377)
+name: Azure DevOps REST API Probe
+'on':
+  workflow_dispatch:
+    inputs:
+      allow_mutating_probes:
+        description: "Enable temporary write probes (default read-only)"
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+      AZURE_DEVOPS_ORG_URL: ${{ secrets.AZURE_DEVOPS_ORG_URL }}
+      ALLOW_MUTATING_PROBES: ${{ inputs.allow_mutating_probes }}
+    steps:
+      - name: Probe REST endpoints without exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AZURE_DEVOPS_PAT"
+          test -n "$AZURE_DEVOPS_ORG_URL"
+          AUTH="$(printf ':%s' "$AZURE_DEVOPS_PAT" | base64 -w0)"
+          echo "::add-mask::$AZURE_DEVOPS_PAT"
+          echo "::add-mask::$AUTH"
+          export AZDO_AUTH="$AUTH"
+          python3 - <<'PY'
+          import os,json,urllib.request,urllib.error,urllib.parse
+          org=os.environ["AZURE_DEVOPS_ORG_URL"].rstrip("/")
+          h={"Authorization":"Basic "+os.environ["AZDO_AUTH"],"Accept":"application/json"}
+          def get(k,p,accept="application/json"):
+            u=org+p+("&" if "?" in p else "?")+"api-version=7.1"
+            q=urllib.request.Request(u,headers={**h,"Accept":accept})
+            try:
+              r=urllib.request.urlopen(q,timeout=25); code=r.status; ct=r.headers.get("Content-Type",""); raw=r.read()
+            except urllib.error.HTTPError as e: code=e.code; ct=e.headers.get("Content-Type",""); raw=e.read()
+            try: d=json.loads(raw)
+            except: d={"preview":raw[:180].decode("utf8","replace")}
+            state="PASS" if 200<=code<300 and code!=203 and "html" not in ct.lower() else ("NOT_FOUND" if code==404 else ("BLOCKED" if code in (401,403,203) or "html" in ct.lower() else "FAIL"))
+            out={"probe":k,"method":"GET","path":p,"api_version":"7.1","http_status":code,"content_type":ct,"result":state}
+            if isinstance(d,dict):
+              out["keys"]=list(d)[:20]
+              if "message" in d: out["message"]=str(d["message"])[:300]
+              if isinstance(d.get("value"),list):
+                out["count"]=len(d["value"])
+                out["items"]=[{x:v for x,v in z.items() if x in ("id","name","state","visibility","defaultBranch","remoteUrl","folder","revision","status","result","buildNumber","queueTime","startTime","finishTime","isHosted","lineCount")} for z in d["value"][:8] if isinstance(z,dict)]
+              if isinstance(d.get("records"),list): out["records"]=[{x:v for x,v in z.items() if x in ("id","parentId","type","name","state","result","log","issues")} for z in d["records"][:12]]
+            elif "preview" in d: out["preview"]=d["preview"]
+            print(json.dumps(out))
+            return d
+          projects=get("A1","/_apis/projects")
+          ps=projects.get("value",[]) if isinstance(projects,dict) else []
+          if ps:
+            p=urllib.parse.quote(ps[0]["name"],safe="")
+            get("A2",f"/{p}/_apis/git/repositories")
+            pipes=get("A3",f"/{p}/_apis/pipelines")
+            pls=pipes.get("value",[]) if isinstance(pipes,dict) else []
+            if pls:
+              pid=pls[0]["id"]; get("A4",f"/{p}/_apis/pipelines/{pid}")
+              builds=get("C1",f"/{p}/_apis/build/builds?definitions={pid}&$top=10")
+              bs=builds.get("value",[]) if isinstance(builds,dict) else []
+              if bs:
+                bid=bs[0]["id"]; get("C2",f"/{p}/_apis/build/builds/{bid}")
+                get("D1",f"/{p}/_apis/build/builds/{bid}/timeline")
+                logs=get("D2",f"/{p}/_apis/build/builds/{bid}/logs")
+                ls=logs.get("value",[]) if isinstance(logs,dict) else []
+                if ls:
+                  lid=ls[0]["id"]; get("D3-text",f"/{p}/_apis/build/builds/{bid}/logs/{lid}?startLine=1&endLine=50","text/plain")
+                  get("D3-json",f"/{p}/_apis/build/builds/{bid}/logs/{lid}?startLine=1&endLine=50","application/json")
+                else: print(json.dumps({"probe":"D3","result":"BLOCKED_NO_LOG"}))
+              else:
+                for x in ("C2","D1","D2","D3"): print(json.dumps({"probe":x,"result":"BLOCKED_NO_BUILD"}))
+            else:
+              print(json.dumps({"probe":"A4","result":"BLOCKED_NO_PIPELINE"}))
+              for x in ("C1","C2","D1","D2","D3"): print(json.dumps({"probe":x,"result":"BLOCKED_NO_PIPELINE"}))
+            get("B1",f"/{p}/_apis/distributedtask/variablegroups")
+            get("E1",f"/{p}/_apis/build/builds/999999999")
+          else:
+            for x in ("A2","A3","A4","B1","C1","C2","D1","D2","D3","E1"): print(json.dumps({"probe":x,"result":"BLOCKED_NO_PROJECT"}))
+          get("A5","/_apis/distributedtask/pools")
+          for x in ("B2","C3","C4"): print(json.dumps({"probe":x,"result":"NOT_RUN_READ_ONLY","detail":"Write probes are intentionally disabled in this safe baseline run"}))
+          print(json.dumps({"probe":"E2","result":"PARTIAL","detail":"203 and HTML login responses are classified as blocked; invalid PAT is not intentionally tested"}))
+          PY

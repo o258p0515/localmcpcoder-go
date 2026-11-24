@@ -39,6 +39,7 @@ type Registry struct {
 	D        Deps
 	todoMu   sync.RWMutex
 	todos    []todoItem
+	gitLocks sync.Map
 }
 
 func New(d Deps) *Registry {

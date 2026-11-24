@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+test -n "$MCP_TOKEN"
+test -n "$GIT_CREDENTIAL_URL"
+test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"
+test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+test -n "$RUNNER_TEMP"
+BIN="$RUNNER_TEMP/localmcpcoder-git-executor"
+ROOT="$RUNNER_TEMP/issue23-shared-workspace"
+AGENT_LOG="$RUNNER_TEMP/issue23-agent-smoke.log"
+GIT_LOG="$RUNNER_TEMP/issue23-git-smoke.log"
+AGENT_PID=""
+GIT_PID=""
+cleanup() {
+  set +e
+  if [ -n "$AGENT_PID" ]; then sudo kill "$AGENT_PID" 2>/dev/null; fi
+  if [ -n "$GIT_PID" ]; then sudo kill "$GIT_PID" 2>/dev/null; fi
+  sudo pkill -u mcp-agent -f "$BIN" 2>/dev/null
+  sudo pkill -u mcp-git -f "$BIN" 2>/dev/null
+  sudo pkill -u mcp-git -f '^sleep 90$' 2>/dev/null
+  sudo rm -rf /tmp/issue23-git-private
+}
+trap cleanup EXIT
+sudo groupadd --system mcp-workspace 2>/dev/null || true
+sudo useradd --system --create-home --home-dir /home/mcp-agent --shell /usr/sbin/nologin mcp-agent 2>/dev/null || true
+sudo useradd --system --create-home --home-dir /home/mcp-git --shell /usr/sbin/nologin mcp-git 2>/dev/null || true
+sudo usermod -aG mcp-workspace mcp-agent
+sudo usermod -aG mcp-workspace mcp-git
+sudo install -d -o "$(id -un)" -g mcp-workspace -m 2770 "$ROOT"
+printf 'MCP_SHARED_ROOT=%s\n' "$ROOT" >> "$GITHUB_ENV"
+umask 0002
+sudo -u mcp-agent env -i PATH="$PATH" HOME=/home/mcp-agent MCP_TOKEN="$MCP_TOKEN" \
+  "$BIN" --root "$ROOT" --port 8787 --tunnel none >"$AGENT_LOG" 2>&1 &
+AGENT_PID=$!
+sudo -u mcp-git env -i PATH="$PATH" HOME=/home/mcp-git MCP_TOKEN="$MCP_TOKEN" \
+  GIT_CREDENTIAL_URL="$GIT_CREDENTIAL_URL" MCP_TOOL_PROFILE=git-executor \
+  ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL" \
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN="$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+  "$BIN" --root "$ROOT" --port 8788 --tunnel none --tool-profile git-executor >"$GIT_LOG" 2>&1 &
+GIT_PID=$!
+wait_http() {
+  local port="$1"
+  for _ in $(seq 1 60); do
+    if curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  echo "MCP server on port $port did not become healthy" >&2
+  return 1
+}
+wait_http 8787
+wait_http 8788
+mcp_call() {
+  local port="$1" payload="$2"
+  curl -fsS "http://127.0.0.1:$port/mcp" \
+    -H "Authorization: Bearer $MCP_TOKEN" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    --data "$payload"
+}
+AGENT_TOOLS="$(mcp_call 8787 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
+GIT_TOOLS="$(mcp_call 8788 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
+jq -e '.result.tools | (map(.name) | index("bash") != null and index("git_execute") == null)' <<<"$AGENT_TOOLS" >/dev/null
+jq -e '.result.tools | (length == 1 and .[0].name == "git_execute" and ((.[0].inputSchema.properties // {}) | has("token") | not) and ((.[0].inputSchema.properties // {}) | has("credential") | not))' <<<"$GIT_TOOLS" >/dev/null
+PRIVATE_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/kiem-thu.git",destination:"private-empty"}}}')")"
+jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_CLONE" >/dev/null
+! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PRIVATE_CLONE"
+test -d "$ROOT/private-empty/.git"
+PUBLIC_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/localmcpcoder-go.git",destination:"public-shared"}}}')")"
+jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev/null
+AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'shared-workspace-check\\n' > issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
+jq -e '.result.isError != true and .error == null' <<<"$AGENT_WRITE" >/dev/null
+STATUS="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:"public-shared"}}}')")"
+jq -r '.result.content[]?.text // empty' <<<"$STATUS" | grep -q 'issue23-shared-workspace.txt'
+for op in fetch pull push branch log; do
+  RESPONSE="$(mcp_call 8788 "$(jq -cn --arg op "$op" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"git_execute",arguments:{operation:$op,account:"personal",path:"public-shared",ref:"main"}}}')")"
+  jq -e '.result.isError != true and .error == null' <<<"$RESPONSE" >/dev/null
+  ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$RESPONSE"
+done
+sudo -u mcp-git env ISSUE23_ISOLATION_SENTINEL=private-value sh -c \
+  'install -d -m 700 /tmp/issue23-git-private; printf sentinel > /tmp/issue23-git-private/credential; chmod 600 /tmp/issue23-git-private/credential; exec sleep 90' &
+SENTINEL_PID=$!
+sleep 1
+GIT_SENTINEL_PID="$(pgrep -u mcp-git -f '^sleep 90$' | head -n1)"
+ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\000' '\\n' </proc/$GIT_SENTINEL_PID/environ 2>/dev/null | grep -q ISSUE23_ISOLATION_SENTINEL; then exit 42; fi; echo isolation-ok"
+ISOLATION="$(mcp_call 8787 "$(jq -cn --arg command "$ISOLATION_COMMAND" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')")"
+jq -e '.result.isError != true and .error == null' <<<"$ISOLATION" >/dev/null
+jq -r '.result.content[]?.text // empty' <<<"$ISOLATION" | grep -q 'isolation-ok'
+sudo kill "$SENTINEL_PID" 2>/dev/null || true
+if sudo find /tmp -maxdepth 1 -type d -name 'localmcp-git-auth-*' -print -quit | grep -q .; then
+  echo "temporary Git credential directory was not cleaned" >&2
+  exit 1
+fi
+echo "issue23 paired-runner smoke: PASS (live OIDC/private clone, Git-only catalog, shared workspace, fetch/pull/push auth, UID isolation, temp cleanup)"

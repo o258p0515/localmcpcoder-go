@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -84,6 +85,11 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	if ref != "" && !validBranchRef(ref) {
 		return fail("ref must be a valid branch name")
 	}
+	lockValue, _ := r.gitLocks.LoadOrStore(repoPath, &sync.Mutex{})
+	repoLock := lockValue.(*sync.Mutex)
+	repoLock.Lock()
+	defer repoLock.Unlock()
+
 	needsCredential := op == "clone" || op == "fetch" || op == "pull" || op == "push"
 	var credential gitCredential
 	if needsCredential {
@@ -106,7 +112,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	}
 	_ = os.Chmod(hooksDir, 0700)
 	defer os.RemoveAll(hooksDir)
-	args := []string{"-c", "credential.helper=", "-c", "core.hooksPath=" + hooksDir, "-c", "http.extraHeader=", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always"}
+	args := []string{"-c", "credential.helper=", "-c", "core.hooksPath=" + hooksDir, "-c", "http.extraHeader=", "-c", "http.https://github.com/.extraHeader=", "-c", "http.sslVerify=true", "-c", "http.https://github.com/.sslVerify=true", "-c", "http.https://github.com/.sslCAInfo=", "-c", "http.https://github.com/.proxy=", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always"}
 	switch op {
 	case "clone":
 		args = append(args, "clone", "--", val(a, "repository"), repoPath)

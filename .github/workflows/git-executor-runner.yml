@@ -3,10 +3,10 @@ on:
   workflow_dispatch:
     inputs:
       runner_name:
-        description: Unique isolated Git executor runner name
+        description: Prefix for the paired Agent and Git executor runner IDs
         type: string
         required: false
-        default: git-executor
+        default: issue23
       duration_seconds:
         description: Runner lifetime in seconds (maximum 20400 / 5h40m)
         type: number
@@ -31,7 +31,7 @@ jobs:
         with:
           go-version: '1.23.x'
           cache-dependency-path: go/go.mod
-      - name: Validate isolated executor configuration
+      - name: Validate paired runner configuration
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
@@ -40,45 +40,73 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in HUB_URLS MCP_TOKEN GIT_CREDENTIAL_URL; do
-            if [ -z "${!name:-}" ]; then echo "::error title=Missing configuration::$name is required"; exit 1; fi
-          done
-          if ! [[ "$GIT_CREDENTIAL_URL" =~ ^https://[^/]+/internal/runner/git-credential$ ]]; then
-            echo "::error title=Invalid credential endpoint::GIT_CREDENTIAL_URL must be the HTTPS internal credential route"; exit 1
-          fi
+          test -n "$HUB_URLS"
+          test -n "$MCP_TOKEN"
+          test -n "$GIT_CREDENTIAL_URL"
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
           if ! [[ "$DURATION_SECONDS" =~ ^[0-9]+$ ]] || [ "$DURATION_SECONDS" -lt 60 ] || [ "$DURATION_SECONDS" -gt 20400 ]; then
             echo "::error title=Invalid duration::duration_seconds must be between 60 and 20400"; exit 1
           fi
-      - name: Build and test isolated Git executor
+      - name: Build and test LocalMCP runner
         working-directory: go
         run: |
           set -euo pipefail
           go test ./...
+          go test -race ./...
+          go vet ./...
           go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-git-executor" ./cmd/mcp
-      - name: Start Git-only outbound Hub runner
+      - name: Verify OIDC credential flow and paired-runner isolation
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
+        run: ./scripts/issue23-git-pair-smoke.sh
+      - name: Start paired Agent and Git-only Hub runners
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
-          MCP_TOOL_PROFILE: git-executor
-          LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name }}
-          LOCALMCP_RUNNER_TAGS: linux,git,isolated
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
+          RUNNER_NAME_PREFIX: ${{ inputs.runner_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$RUNNER_TEMP/git-executor-root"
+          ROOT="$RUNNER_TEMP/issue23-shared-workspace"
           mkdir -p "$ROOT"
-          chmod 700 "$ROOT"
-          RUNNER_ID="${LOCALMCP_RUNNER_NAME:-git-executor}-${GITHUB_RUN_ID}"
-          echo "Starting isolated Git-only runner $RUNNER_ID; no shell/file tools are registered."
+          sudo groupadd --system mcp-workspace 2>/dev/null || true
+          sudo useradd --system --create-home --home-dir /home/mcp-agent --shell /usr/sbin/nologin mcp-agent 2>/dev/null || true
+          sudo useradd --system --create-home --home-dir /home/mcp-git --shell /usr/sbin/nologin mcp-git 2>/dev/null || true
+          sudo usermod -aG mcp-workspace mcp-agent
+          sudo usermod -aG mcp-workspace mcp-git
+          sudo chown "$(id -un)":mcp-workspace "$ROOT"
+          sudo chmod 2770 "$ROOT"
+          AGENT_ID="$RUNNER_NAME_PREFIX-agent-$GITHUB_RUN_ID"
+          GIT_ID="$RUNNER_NAME_PREFIX-git-$GITHUB_RUN_ID"
+          echo "Starting Agent runner $AGENT_ID and isolated Git-only runner $GIT_ID on shared workspace $ROOT."
+          echo "Agent and Git executor use different OS users; only the workspace group is shared."
+          umask 0002
           set +e
-          timeout --signal=TERM --kill-after=40s "${DURATION_SECONDS}s" \
-            "$RUNNER_TEMP/localmcpcoder-git-executor" --root "$ROOT" --tunnel hub \
-            --hub-urls "$HUB_URLS" --runner-id "$RUNNER_ID" --runner-tags "$LOCALMCP_RUNNER_TAGS" \
-            --tool-profile git-executor
-          STATUS=$?
+          sudo -u mcp-agent env -i PATH="$PATH" HOME=/home/mcp-agent MCP_TOKEN="$MCP_TOKEN" HUB_URLS="$HUB_URLS" \
+            timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
+            "$RUNNER_TEMP/localmcpcoder-git-executor" --root "$ROOT" --port 8787 --tunnel hub \
+            --hub-urls "$HUB_URLS" --runner-id "$AGENT_ID" --runner-tags "linux,agent,issue23" &
+          AGENT_PID=$!
+          sudo -u mcp-git env -i PATH="$PATH" HOME=/home/mcp-git MCP_TOKEN="$MCP_TOKEN" HUB_URLS="$HUB_URLS" \
+            GIT_CREDENTIAL_URL="$GIT_CREDENTIAL_URL" MCP_TOOL_PROFILE=git-executor \
+            ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL" \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN="$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
+            "$RUNNER_TEMP/localmcpcoder-git-executor" --root "$ROOT" --port 8788 --tunnel hub \
+            --hub-urls "$HUB_URLS" --runner-id "$GIT_ID" --runner-tags "linux,git,isolated" \
+            --tool-profile git-executor &
+          GIT_PID=$!
+          wait "$AGENT_PID"; AGENT_STATUS=$?
+          wait "$GIT_PID"; GIT_STATUS=$?
           set -e
-          if [ "$STATUS" -eq 124 ] || [ "$STATUS" -eq 143 ]; then exit 0; fi
-          exit "$STATUS"
+          if [ "$AGENT_STATUS" -eq 124 ] || [ "$AGENT_STATUS" -eq 143 ]; then AGENT_STATUS=0; fi
+          if [ "$GIT_STATUS" -eq 124 ] || [ "$GIT_STATUS" -eq 143 ]; then GIT_STATUS=0; fi
+          if [ "$AGENT_STATUS" -ne 0 ] || [ "$GIT_STATUS" -ne 0 ]; then
+            echo "::error title=Paired runner stopped unexpectedly::Agent=$AGENT_STATUS Git=$GIT_STATUS"
+            exit 1
+          fi

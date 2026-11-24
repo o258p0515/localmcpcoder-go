@@ -89,6 +89,7 @@ jobs:
           sudo usermod -aG mcp-workspace mcp-agent
           sudo usermod -aG mcp-workspace mcp-git
           sudo chown "$(id -un)":mcp-workspace "$ROOT"
+          sudo chgrp mcp-workspace "$ROOT"
           sudo chmod 3770 "$ROOT"
           AGENT_ID="$RUNNER_NAME_PREFIX-agent-$GITHUB_RUN_ID"
           GIT_ID="$RUNNER_NAME_PREFIX-git-$GITHUB_RUN_ID"

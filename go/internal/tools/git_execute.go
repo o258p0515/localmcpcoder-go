@@ -270,7 +270,13 @@ func makeSharedWorkspaceGroupWritable(root string) error {
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil { return err }
 		if info.Mode()&os.ModeSymlink != 0 { return nil }
-		if info.IsDir() { mode := os.FileMode(0770) | os.ModeSetgid; if path == root { mode |= os.ModeSticky }; return os.Chmod(path, mode) }
+		if info.IsDir() {
+			// The Hub bootstrap creates root as the runner user with group mcp-workspace
+			// and mode 03770. mcp-git is deliberately not the owner of that root and
+			// must not try to chmod it; only chmod Git-created child directories.
+			if path == root { return nil }
+			return os.Chmod(path, os.FileMode(0770)|os.ModeSetgid)
+		}
 		perms := (info.Mode().Perm() & 0700) | 0060
 		if info.Mode().Perm()&0100 != 0 { perms |= 0010 }
 		return os.Chmod(path, perms)

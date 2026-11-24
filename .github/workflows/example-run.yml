@@ -40,17 +40,21 @@ jobs:
           RUNNER_NAME="${RUNNER_NAME:-public-mcp}"
           RUNNER_TAGS="${RUNNER_TAGS:-linux,go,gha,public}"
           DURATION_SECONDS="${DURATION_SECONDS:-20400}"
-          SAFE_RUNNER_NAME="$(printf '%s' "$RUNNER_NAME" | LC_ALL=C tr -cd '[:alnum:]._-' )"
-          SAFE_RUNNER_TAGS="$(printf '%s' "$RUNNER_TAGS" | LC_ALL=C tr -cd '[:alnum:]._,: -')"
-          if [ -z "$RUNNER_NAME" ] || [ "${#RUNNER_NAME}" -gt 64 ] || [ "$SAFE_RUNNER_NAME" != "$RUNNER_NAME" ]; then
-            echo "::error title=Invalid runner name::Use 1-64 ASCII letters, numbers, dots, underscores, or hyphens."
+          if [ -z "$RUNNER_NAME" ] || [ "${#RUNNER_NAME}" -gt 64 ] || [[ "$RUNNER_NAME" == *$'\\n'* || "$RUNNER_NAME" == *$'\\r'* ]]; then
+            echo "::error title=Invalid runner name::Runner name must be 1-64 characters and contain no line breaks."
             exit 1
           fi
-          if [ -z "$RUNNER_TAGS" ] || [ "${#RUNNER_TAGS}" -gt 200 ] || [ "$SAFE_RUNNER_TAGS" != "$RUNNER_TAGS" ]; then
-            echo "::error title=Invalid runner tags::Use a comma-separated list of simple tags."
+          if [ -z "$RUNNER_TAGS" ] || [ "${#RUNNER_TAGS}" -gt 200 ] || [[ "$RUNNER_TAGS" == *$'\\n'* || "$RUNNER_TAGS" == *$'\\r'* ]]; then
+            echo "::error title=Invalid runner tags::Runner tags must be 1-200 characters and contain no line breaks."
             exit 1
           fi
-          if [[ ! "$DURATION_SECONDS" =~ ^[0-9]+$ ]] || [ "$DURATION_SECONDS" -lt 60 ] || [ "$DURATION_SECONDS" -gt 20400 ]; then
+          case "$DURATION_SECONDS" in
+            ''|*[!0123456789]*)
+              echo "::error title=Invalid duration::duration_seconds must be an integer between 60 and 20400."
+              exit 1
+              ;;
+          esac
+          if [ "$DURATION_SECONDS" -lt 60 ] || [ "$DURATION_SECONDS" -gt 20400 ]; then
             echo "::error title=Invalid duration::duration_seconds must be between 60 and 20400."
             exit 1
           fi

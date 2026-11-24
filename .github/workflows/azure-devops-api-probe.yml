@@ -108,7 +108,7 @@ jobs:
                 "/.azure-pipelines/issue69-linux.yml": "\n".join(["pool:","  vmImage: ubuntu-latest","steps:","- bash: |","    echo 'ISSUE69_LINUX_START'","    echo 'ISSUE69_LOG_MARKER_001'","    echo 'ISSUE69_LOG_MARKER_002'","    echo 'ISSUE69_LINUX_END'","  displayName: Issue 69 Linux probe"])+"\n",
                 "/.azure-pipelines/issue69-live.yml": "\n".join(["pool:","  vmImage: ubuntu-latest","steps:","- checkout: none","- bash: |","    echo 'ISSUE69_LIVE_START'","    echo 'ISSUE69_LIVE_LOG_MARKER_001'","    sleep 150","    echo 'ISSUE69_LIVE_END'","  displayName: Issue 69 live log and cancellation probe"])+"\n",
                 "/.azure-pipelines/issue69-windows.yml": "\n".join(["pool:","  vmImage: windows-latest","steps:","- powershell: |","    Write-Host 'ISSUE69_WINDOWS_START'","    Write-Host 'ISSUE69_WINDOWS_LOG_MARKER_001'","    Write-Host 'ISSUE69_WINDOWS_END'","  displayName: Issue 69 Windows probe"])+"\n",
-                "/.azure-pipelines/issue69-parameters.yml": "\n".join(["parameters:","- name: runner_id","  type: string","  default: probe","- name: tags","  type: object","  default: []","- name: duration","  type: number","  default: 0","pool:","  vmImage: ubuntu-latest","steps:","- checkout: none","- bash: |","    echo 'runner_id="+chr(36)+"{{ parameters.runner_id }}'","    echo 'tags="+chr(36)+"{{ join(parameters.tags, ',') }}'","    echo 'duration="+chr(36)+"{{ parameters.duration }}'","    sleep "+chr(36)+"{{ parameters.duration }}","  displayName: Issue 69 template parameter probe"])+"\n"
+                "/.azure-pipelines/issue69-parameters.yml": "\n".join(["parameters:","- name: runner_id","  type: string","  default: probe","- name: tags","  type: string","  default: \"\"","- name: duration","  type: string","  default: \"0\"","pool:","  vmImage: ubuntu-latest","steps:","- checkout: none","- bash: |","    echo 'runner_id="+chr(36)+"{{ parameters.runner_id }}'","    echo 'tags="+chr(36)+"{{ parameters.tags }}'","    echo 'duration="+chr(36)+"{{ parameters.duration }}'","    sleep "+chr(36)+"{{ parameters.duration }}","  displayName: Issue 69 template parameter probe"])+"\n"
               }
               pipeline_defs=[]
               branch_created=False
@@ -187,9 +187,11 @@ jobs:
                     if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"):
                       pipeline_defs.append({"id":pipe["id"],"name":pname_def,"path":path})
                       api("A4-pipeline-detail-"+str(pipe["id"]),"GET",f"/{pname}/_apis/pipelines/{pipe['id']}")
-                  def queue_and_poll(label,definition,live=False,windows=False,template_params=None):
+                  def queue_and_poll(label,definition,live=False,windows=False,template_params=None,wrap_run_parameters=False):
                     body={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}
-                    if template_params: body["templateParameters"]=template_params
+                    if template_params:
+                      if wrap_run_parameters: body={"runParameters":{**body,"templateParameters":template_params}}
+                      else: body["templateParameters"]=template_params
                     code,run=api(label+"-queue","POST",f"/{pname}/_apis/pipelines/{definition['id']}/runs",body)
                     run_id=run.get("id") if isinstance(run,dict) else None
                     if 200<=code<300 and run_id:
@@ -239,7 +241,10 @@ jobs:
                   if live: queue_and_poll("C3-live",live,live=True)
                   if win: queue_and_poll("C3-windows",win,windows=True)
                   if params:
-                    queue_and_poll("C3-template-parameters",params,template_params={"runner_id":"issue69-runner-probe","tags":["issue69","linux"],"duration":0})
+                    param_values={"runner_id":"issue69-runner-probe","tags":"issue69,linux","duration":"0"}
+                    param_run=queue_and_poll("C3-template-parameters-top-level",params,template_params=param_values)
+                    if not param_run:
+                      queue_and_poll("C3-template-parameters-wrapper",params,template_params=param_values,wrap_run_parameters=True)
                   # Queue Linux and Windows back-to-back to observe real hosted parallelism/queue behavior.
                   if linux and win:
                     common={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}

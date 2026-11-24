@@ -82,6 +82,39 @@ jobs:
           else:
             for x in ("A2","A3","A4","B1","C1","C2","D1","D2","D3","E1"): print(json.dumps({"probe":x,"result":"BLOCKED_NO_PROJECT"}))
           get("A5","/_apis/distributedtask/pools")
-          for x in ("B2","C3","C4"): print(json.dumps({"probe":x,"result":"NOT_RUN_READ_ONLY","detail":"Write probes are intentionally disabled in this safe baseline run"}))
+          if os.environ.get("ALLOW_MUTATING_PROBES","false").lower()=="true" and ps:
+            import uuid
+            pn=urllib.parse.quote(ps[0]["name"],safe="")
+            base=org+f"/{pn}/_apis/distributedtask/variablegroups"
+            name="LocalMCP-Issue69-Probe-"+os.environ.get("GITHUB_RUN_ID","manual")
+            secret="ISSUE69_PROBE_"+uuid.uuid4().hex[:8].upper()
+            body={"type":"Vsts","name":name,"description":"Temporary Issue #69 probe; auto-deleted","variables":{secret:{"value":uuid.uuid4().hex,"isSecret":True}},"variableGroupProjectReferences":[{"name":name,"description":"Temporary probe","projectReference":{"id":ps[0]["id"],"name":ps[0]["name"]}}]}
+            gid=None
+            def mutate(label,method,url,payload=None):
+              data=None if payload is None else json.dumps(payload).encode()
+              req=urllib.request.Request(url,data=data,headers={**h,"Content-Type":"application/json"},method=method)
+              try:
+                with urllib.request.urlopen(req,timeout=30) as r: code=r.status; raw=r.read()
+              except urllib.error.HTTPError as e: code=e.code; raw=e.read()
+              try: d=json.loads(raw) if raw else {}
+              except: d={}
+              print(json.dumps({"probe":label,"method":method,"http_status":code,"result":"PASS" if 200<=code<300 else "FAIL","response_keys":list(d)[:15] if isinstance(d,dict) else []}))
+              return code,d
+            try:
+              code,d=mutate("B2-create","POST",base+"?api-version=7.1",body)
+              if 200<=code<300 and isinstance(d,dict):
+                gid=d.get("id")
+                if gid:
+                  body["id"]=gid
+                  mutate("B2-update","PUT",base+f"/{gid}?api-version=7.1",body)
+            finally:
+              if gid: mutate("B2-cleanup-delete","DELETE",base+f"/{gid}?api-version=7.1")
+          else: print(json.dumps({"probe":"B2","result":"NOT_RUN_READ_ONLY"}))
+          if ps and not (pipes.get("value",[]) if isinstance(pipes,dict) else []):
+            print(json.dumps({"probe":"C3","result":"BLOCKED_NO_PIPELINE"}))
+            print(json.dumps({"probe":"C4","result":"BLOCKED_NO_BUILD"}))
+          else:
+            print(json.dumps({"probe":"C3","result":"NOT_RUN_READ_ONLY"}))
+            print(json.dumps({"probe":"C4","result":"NOT_RUN_READ_ONLY"}))
           print(json.dumps({"probe":"E2","result":"PARTIAL","detail":"203 and HTML login responses are classified as blocked; invalid PAT is not intentionally tested"}))
           PY

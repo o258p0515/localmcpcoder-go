@@ -98,26 +98,26 @@ jobs:
               branch="refs/heads/issue69-probe-"+run_tag
               file_path="/.azure-pipelines/issue69-probe.yml"
               yaml_text="""parameters:
-- name: vmImage
-  type: string
-  default: ubuntu-latest
-- name: holdSeconds
-  type: number
-  default: 0
-pool:
-  vmImage: ${{ parameters.vmImage }}
-steps:
-- bash: |
-    echo 'ISSUE69_PROBE_START'
-    echo "Agent OS: $(Agent.OS)"
-    echo "Agent name: $(Agent.Name)"
-    echo "Build ID: $(Build.BuildId)"
-    echo "Repository: $(Build.Repository.Name)"
-    echo 'ISSUE69_PROBE_LOG_MARKER_001'
-    echo 'ISSUE69_PROBE_LOG_MARKER_002'
-    sleep ${{ parameters.holdSeconds }}
-    echo 'ISSUE69_PROBE_END'
-  displayName: Issue 69 API probe
+          - name: vmImage
+            type: string
+            default: ubuntu-latest
+          - name: holdSeconds
+            type: number
+            default: 0
+          pool:
+            vmImage: """ + chr(36) + "{{ parameters.vmImage }}"
+          steps:
+          - bash: |
+              echo 'ISSUE69_PROBE_START'
+              echo "Agent OS: $(Agent.OS)"
+              echo "Agent name: $(Agent.Name)"
+              echo "Build ID: $(Build.BuildId)"
+              echo "Repository: $(Build.Repository.Name)"
+              echo 'ISSUE69_PROBE_LOG_MARKER_001'
+              echo 'ISSUE69_PROBE_LOG_MARKER_002'
+              sleep """ + chr(36) + "{{ parameters.holdSeconds }}"
+              echo 'ISSUE69_PROBE_END'
+            displayName: Issue 69 API probe
 """
               pipeline_id=None
               branch_created=False

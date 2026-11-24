@@ -58,10 +58,10 @@ describe("MCP Hub routing", () => {
   it("exposes all 16 baseline tools with runner_id and async when no runner is online", async () => {
     const { env } = fakeEnv({ runners: [] });
     const tools = await listed(env);
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(17);
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_runners", "select_runner", "get_job_result", "bash", "read_file", "write_file", "edit_file",
-      "list_dir", "glob", "grep", "todo_write", "todo_read", "system_info", "skills_list", "skill_read", "skills_reload"
+      "list_dir", "glob", "grep", "todo_write", "todo_read", "system_info", "skills_list", "skill_read", "skills_reload", "git_execute"
     ]);
     for (const tool of tools.slice(3)) {
       expect(tool.inputSchema.properties.runner_id.type).toBe("string");
@@ -73,6 +73,11 @@ describe("MCP Hub routing", () => {
     const { env } = fakeEnv();
     const tools = await listed(env);
     expect(tools.map((tool) => tool.name)).toContain("bash");
+    const git = tools.find((tool) => tool.name === "git_execute");
+    expect(git.inputSchema.required).toEqual(["operation", "account"]);
+    expect(git.inputSchema.properties.operation.enum).toContain("clone");
+    expect(git.inputSchema.properties).not.toHaveProperty("token");
+    expect(git.inputSchema.properties).not.toHaveProperty("credential");
     expect(tools.find((tool) => tool.name === "read_file").inputSchema.required).toEqual(["file_path"]);
   });
 
@@ -101,7 +106,7 @@ describe("MCP Hub routing", () => {
   it("falls back to the baseline catalog if every runner dispatch fails", async () => {
     const { env } = fakeEnv({ failRunnerIds: ["r1"] });
     const tools = await listed(env);
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(17);
     expect(tools.map((tool) => tool.name)).toContain("skills_reload");
     expect(tools.find((tool) => tool.name === "skills_reload").inputSchema.properties.runner_id.type).toBe("string");
   });
@@ -127,6 +132,40 @@ describe("MCP Hub routing", () => {
     const bash = tools.find((tool) => tool.name === "bash");
     expect(bash.inputSchema.properties.runner_id.type).toBe("string");
     expect(bash.inputSchema.properties.async.type).toBe("boolean");
+  });
+
+  it("routes git_execute to the isolated Git runner and normal tools to the Agent runner", async () => {
+    const { env, runnerCalls } = fakeEnv({
+      runners: [
+        { runner_id: "agent-1", tags: ["linux", "agent"], status: "online" },
+        { runner_id: "git-1", tags: ["linux", "git", "isolated"], status: "online" }
+      ],
+      toolsByRunner: {
+        "agent-1": [{ name: "bash", inputSchema: { type: "object", properties: { command: { type: "string" } } } }],
+        "git-1": [{ name: "git_execute", inputSchema: { type: "object", properties: { operation: { type: "string" }, account: { type: "string" } }, required: ["operation", "account"] } }]
+      }
+    });
+    await handleMcp(request({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "bash", arguments: { command: "id" } } }), env, "session-1");
+    await handleMcp(request({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "git_execute", arguments: { operation: "status", account: "personal" } } }), env, "session-1");
+    const calls = runnerCalls.filter((call) => call.body.payload?.method === "tools/call");
+    expect(calls.map((call) => [call.runnerId, call.body.payload.params.name])).toEqual([
+      ["agent-1", "bash"],
+      ["git-1", "git_execute"]
+    ]);
+  });
+
+  it("routes a tool to its compatible paired runner even when the session is pinned to the other role", async () => {
+    const { env, runnerCalls } = fakeEnv({
+      runners: [
+        { runner_id: "agent-1", tags: ["linux", "agent"], status: "online" },
+        { runner_id: "git-1", tags: ["linux", "git", "isolated"], status: "online" }
+      ]
+    });
+    await handleMcp(request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "select_runner", arguments: { runner_id: "agent-1" } } }), env, "session-1");
+    await handleMcp(request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "git_execute", arguments: { operation: "status", account: "personal" } } }), env, "session-1");
+    await handleMcp(request({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "bash", arguments: { command: "id" } } }), env, "session-1");
+    const calls = runnerCalls.filter((call) => call.body.payload?.method === "tools/call");
+    expect(calls.map((call) => call.runnerId)).toEqual(["git-1", "agent-1"]);
   });
 
   it("returns the full async job status and result without unwrapping its result field", async () => {

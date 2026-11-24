@@ -97,18 +97,39 @@ async function listRunnerTools(env: Env): Promise<any[]> {
   return [...merged.values()];
 }
 
-async function resolveRunner(env: Env, session: string, headerId: string, argumentId?: string): Promise<{ runner?: RunnerInfo; runners: RunnerInfo[]; error?: string }> {
+async function resolveRunner(env: Env, session: string, headerId: string, argumentId?: string, toolName = ""): Promise<{ runner?: RunnerInfo; runners: RunnerInfo[]; error?: string }> {
   const runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
   const online = runners.filter((r) => r.status === "online");
-  const requested = argumentId || headerId || await registry(env, { action: "getSessionRunner", session_key: session });
-  if (requested) {
-    const runner = online.find((r) => r.runner_id === requested);
-    if (!runner) return { runners, error: `Runner "${requested}" is not online. Call list_runners.` };
+  const explicit = argumentId || headerId;
+  if (explicit) {
+    const runner = online.find((r) => r.runner_id === explicit);
+    if (!runner) return { runners, error: `Runner "${explicit}" is not online. Call list_runners.` };
     return { runner, runners };
   }
-  if (online.length === 1) return { runner: online[0], runners };
+
+  const selectedId = await registry(env, { action: "getSessionRunner", session_key: session });
+  const selected = online.find((r) => r.runner_id === selectedId);
+  const hasTag = (runner: RunnerInfo | undefined, tag: string) => !!runner?.tags?.includes(tag);
+  const gitRunners = online.filter((runner) => hasTag(runner, "git") && hasTag(runner, "isolated"));
+  const agentRunners = online.filter((runner) => hasTag(runner, "agent"));
+
+  // Keep the Agent and Git-only processes paired behind one Hub endpoint.
+  // An explicit runner_id always wins; otherwise choose a runner by tool role,
+  // even when the session's default runner is the other half of the pair.
+  if (toolName === "git_execute") {
+    if (hasTag(selected, "git") && hasTag(selected, "isolated")) return { runner: selected, runners };
+    if (gitRunners.length === 1) return { runner: gitRunners[0], runners };
+    if (gitRunners.length > 1) return { runners, error: "Multiple isolated Git runners are online. Pass runner_id to select one." };
+    return { runners, error: "No online isolated Git executor runner. Start a runner tagged git,isolated, then call list_runners." };
+  }
+
+  if (hasTag(selected, "agent")) return { runner: selected, runners };
+  if (agentRunners.length === 1) return { runner: agentRunners[0], runners };
+  if (agentRunners.length > 1) return { runners, error: "Multiple Agent runners are online. Pass runner_id to select one." };
+  if (selected && !hasTag(selected, "git")) return { runner: selected, runners };
+  if (online.length === 1 && !hasTag(online[0], "git")) return { runner: online[0], runners };
   if (online.length === 0) return { runners, error: "No online runner. Start a LocalMCP Hub runner, then call list_runners." };
-  return { runners, error: "Multiple runners are online. Call list_runners, then select_runner or pass runner_id to each tool call." };
+  return { runners, error: "No online Agent runner. Start a runner tagged agent, then call list_runners." };
 }
 
 async function processRequest(request: Request, env: Env, session: string, rpc: any): Promise<any> {
@@ -153,7 +174,7 @@ async function processRequest(request: Request, env: Env, session: string, rpc: 
   }
 
   const stripped = stripRunnerArguments(args);
-  const selected = await resolveRunner(env, session, request.headers.get("X-Runner-Id") ?? "", stripped.runnerId);
+  const selected = await resolveRunner(env, session, request.headers.get("X-Runner-Id") ?? "", stripped.runnerId, name);
   if (!selected.runner) return json(id, textResult({ error: selected.error, runners: selected.runners }, true));
   try {
     const payload = await runnerRequest(env, selected.runner.runner_id, "dispatch", {

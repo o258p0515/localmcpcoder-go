@@ -119,6 +119,7 @@ func TestValidatedCommitPathspecsRequireExplicitSafePaths(t *testing.T) {
 }
 
 func TestGitExecuteCommitRequiresExplicitPaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	r := gitProfileRegistry(t)
 	if err := os.MkdirAll(filepath.Join(r.D.Root, "repo"), 0700); err != nil { t.Fatal(err) }
 	res := r.Call(context.Background(), "git_execute", map[string]any{"operation": "commit", "account": "personal", "path": "repo", "message": "safe commit"})
@@ -128,6 +129,7 @@ func TestGitExecuteCommitRequiresExplicitPaths(t *testing.T) {
 }
 
 func TestGitExecuteCommitRejectsPathTraversal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	r := gitProfileRegistry(t)
 	if err := os.MkdirAll(filepath.Join(r.D.Root, "repo"), 0700); err != nil { t.Fatal(err) }
 	res := r.Call(context.Background(), "git_execute", map[string]any{"operation": "commit", "account": "personal", "path": "repo", "message": "safe commit", "paths": []any{"../outside"}})

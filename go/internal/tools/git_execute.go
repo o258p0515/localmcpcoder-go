@@ -270,7 +270,7 @@ func validateGitCommitPaths(repoPath string, raw any) ([]string, error) {
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		value, ok := item.(string)
-		if !ok || strings.TrimSpace(value) == "" || strings.ContainsRune(value, '\\x00') || filepath.IsAbs(value) {
+		if !ok || strings.TrimSpace(value) == "" || strings.ContainsRune(value, '\x00') || filepath.IsAbs(value) {
 			return nil, errors.New("each commit path must be a non-empty relative path")
 		}
 		path := filepath.Clean(value)

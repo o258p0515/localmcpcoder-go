@@ -113,13 +113,32 @@ jobs:
                 except urllib.error.HTTPError as ee: code=ee.code; raw=ee.read(); ct=ee.headers.get("Content-Type","")
                 try: doc=json.loads(raw) if raw else {}
                 except: doc={"preview":raw[:500].decode("utf8","replace")}
-                summary={k:v for k,v in doc.items() if k in ("id","name","state","result","status","url","revision","message","typeKey","count","value")} if isinstance(doc,dict) else str(doc)[:500]
+                summary={k:v for k,v in doc.items() if k in ("id","name","state","result","status","url","revision","message","typeKey","count","value","configuration","folder","path","preview")} if isinstance(doc,dict) else {"preview":str(doc)[:500]}
                 if isinstance(summary,dict) and isinstance(summary.get("value"),list):
                   summary["count"]=len(summary["value"])
-                  summary["value"]=[{k:v for k,v in x.items() if k in ("id","name","state","result","status","lineCount","createdOn","lastChangedOn")} for x in summary["value"][:8] if isinstance(x,dict)]
+                  summary["value"]=[{k:v for k,v in x.items() if k in ("id","name","state","result","status","lineCount","createdOn","lastChangedOn","defaultBranch","remoteUrl")} for x in summary["value"][:8] if isinstance(x,dict)]
+                if isinstance(doc,dict) and isinstance(doc.get("records"),list):
+                  summary["records_count"]=len(doc["records"])
+                  summary["records"]=[{k:v for k,v in x.items() if k in ("id","parentId","type","name","state","result","log","issues")} for x in doc["records"][:12] if isinstance(x,dict)]
+                if isinstance(doc,dict) and "preview" in doc: summary["preview"]=doc["preview"][:500]
+                if isinstance(doc,str): summary={"preview":doc[:500],"line_count":len(doc.splitlines())}
                 print(json.dumps({"probe":label,"method":method,"path":path,"http_status":code,"content_type":ct,"result":"PASS" if 200<=code<300 else "FAIL","response":summary}))
                 return code,doc
               try:
+                # Clean up resources left by an interrupted earlier probe before creating this run's assets.
+                _,old_pipelines=api("PIPELINE-stale-list","GET",f"/{pname}/_apis/pipelines")
+                for stale in (old_pipelines.get("value",[]) if isinstance(old_pipelines,dict) else []):
+                  if str(stale.get("name","")).startswith("LocalMCP-Issue69-"):
+                    api("PIPELINE-stale-delete-"+str(stale.get("id")),"DELETE",f"/{pname}/_apis/build/definitions/{stale['id']}")
+                _,old_refs=api("PIPELINE-stale-branches","GET",f"/{pname}/_apis/git/repositories/{rid}/refs?filter=heads/issue69-probe-")
+                stale_refs=[x for x in (old_refs.get("value",[]) if isinstance(old_refs,dict) else []) if str(x.get("name","")).startswith("refs/heads/issue69-probe-")]
+                _,repo_state=api("PIPELINE-repository-state","GET",f"/{pname}/_apis/git/repositories/{rid}")
+                if stale_refs and isinstance(repo_state,dict) and repo_state.get("defaultBranch") in [x.get("name") for x in stale_refs]:
+                  api("PIPELINE-reset-default-branch","PATCH",f"/{pname}/_apis/git/repositories/{rid}",{"defaultBranch":None})
+                if stale_refs:
+                  api("PIPELINE-stale-delete-branches","POST",f"/{pname}/_apis/git/repositories/{rid}/refs",[{"name":x["name"],"oldObjectId":x["objectId"],"newObjectId":zero} for x in stale_refs])
+                api("A2-post-cleanup","GET",f"/{pname}/_apis/git/repositories")
+                api("A3-post-cleanup","GET",f"/{pname}/_apis/pipelines")
                 _,refs=api("PIPELINE-branch-source","GET",f"/{pname}/_apis/git/repositories/{rid}/refs?filter=heads/main")
                 ref_items=refs.get("value",[]) if isinstance(refs,dict) else []
                 main_ref=next((x for x in ref_items if x.get("name")=="refs/heads/main"),None)
@@ -135,11 +154,15 @@ jobs:
                     pname_def="LocalMCP-Issue69-"+path.rsplit("/",1)[-1].replace(".yml","")+"-"+run_tag
                     cfg={"name":pname_def,"folder":"\\LocalMCP-Issue69-Probe","configuration":{"type":"yaml","path":path,"repository":{"id":rid,"name":repo["name"],"type":"azureReposGit"}}}
                     code,pipe=api("PIPELINE-create-"+path.rsplit("/",1)[-1],"POST",f"/{pname}/_apis/pipelines",cfg)
-                    if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"): pipeline_defs.append({"id":pipe["id"],"name":pname_def,"path":path})
+                    if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"):
+                      pipeline_defs.append({"id":pipe["id"],"name":pname_def,"path":path})
+                      api("A4-pipeline-detail-"+str(pipe["id"]),"GET",f"/{pname}/_apis/pipelines/{pipe['id']}")
                   def queue_and_poll(label,definition,live=False,windows=False):
                     body={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}
                     code,run=api(label+"-queue","POST",f"/{pname}/_apis/pipelines/{definition['id']}/runs",body)
                     run_id=run.get("id") if isinstance(run,dict) else None
+                    if 200<=code<300 and run_id:
+                      api("C1-build-list-"+label,"GET",f"/{pname}/_apis/build/builds?definitions={definition['id']}&$top=10")
                     if not (200<=code<300 and run_id):
                       print(json.dumps({"probe":label,"result":"QUEUE_FAILED"})); return None
                     deadline=time.time()+240
@@ -178,6 +201,21 @@ jobs:
                   if linux: queue_and_poll("C3-linux",linux)
                   if live: queue_and_poll("C3-live",live,live=True)
                   if win: queue_and_poll("C3-windows",win,windows=True)
+                  # Queue Linux and Windows back-to-back to observe real hosted parallelism/queue behavior.
+                  if linux and win:
+                    common={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}
+                    _,cr1=api("C3-concurrency-linux-queue","POST",f"/{pname}/_apis/pipelines/{linux['id']}/runs",common)
+                    _,cr2=api("C3-concurrency-windows-queue","POST",f"/{pname}/_apis/pipelines/{win['id']}/runs",common)
+                    ids=[("linux",cr1.get("id")) if isinstance(cr1,dict) else ("linux",None),("windows",cr2.get("id")) if isinstance(cr2,dict) else ("windows",None)]
+                    for _ in range(40):
+                      states={}
+                      for label,cid in ids:
+                        if cid:
+                          _,st=api("C3-concurrency-"+label+"-status","GET",f"/{pname}/_apis/build/builds/{cid}")
+                          states[label]=(st.get("status"),st.get("result")) if isinstance(st,dict) else (None,None)
+                      if states and all(v[0]=="completed" for v in states.values()): break
+                      time.sleep(6)
+                    print(json.dumps({"probe":"C3-hosted-parallelism-summary","run_ids":dict(ids),"states":states}))
               finally:
                 for definition in pipeline_defs:
                   api("PIPELINE-delete-"+str(definition["id"]),"DELETE",f"/{pname}/_apis/build/definitions/{definition['id']}")

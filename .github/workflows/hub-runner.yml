@@ -8,7 +8,7 @@ on:
         required: false
         default: "gha"
       runner_tags:
-        description: "Comma-separated tags (for example linux,go,sandbox)"
+        description: "Comma-separated tags; pair Agent/Git runners with the same pair:<key> tag (for example linux,agent,pair:build-01)"
         type: string
         required: false
         default: "linux,go,gha"

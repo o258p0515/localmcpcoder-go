@@ -24,8 +24,8 @@ function fakeEnv(options: { runners?: any[]; failRunnerIds?: string[]; toolsByRu
   const runnerStub = {
     async fetch(input: any, init?: RequestInit) {
       const body = JSON.parse(String(init?.body ?? "{}"));
-      runnerCalls.push({ input: String(input), body });
-      const runnerId = String(input).includes("r2") ? "r2" : "r1";
+      const runnerId = (this as any).runnerId ?? "r1";
+      runnerCalls.push({ input: String(input), body, runnerId });
       if (options.failRunnerIds?.includes(runnerId)) return Response.json({ error: "runner dispatch failed" }, { status: 503 });
       if (body.payload?.method === "tools/list") {
         const tools = options.toolsByRunner?.[runnerId] ?? [{ name: "bash", description: "shell", inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } }];
@@ -38,7 +38,7 @@ function fakeEnv(options: { runners?: any[]; failRunnerIds?: string[]; toolsByRu
   };
   const env = {
     REGISTRY_DO: { idFromName: () => "global", get: () => registryStub },
-    RUNNER_DO: { idFromName: (id: string) => id, get: () => runnerStub }
+    RUNNER_DO: { idFromName: (id: string) => id, get: (id: string) => Object.assign(Object.create(runnerStub), { runnerId: id }) }
   } as unknown as Env;
   return { env, sessions, runnerCalls, runners };
 }

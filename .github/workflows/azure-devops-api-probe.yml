@@ -1,0 +1,160 @@
+name: Azure DevOps REST API Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_mutating_probes:
+        description: "Allow temporary Variable Group create/update/delete and pipeline queue/cancel probes"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azure-devops-api-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+      AZURE_DEVOPS_ORG_URL: ${{ secrets.AZURE_DEVOPS_ORG_URL }}
+      ALLOW_MUTATING_PROBES: ${{ inputs.allow_mutating_probes }}
+    steps:
+      - name: Probe Azure DevOps REST API (secrets redacted)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AZURE_DEVOPS_PAT" || { echo "::error::AZURE_DEVOPS_PAT is missing"; exit 1; }
+          test -n "$AZURE_DEVOPS_ORG_URL" || { echo "::error::AZURE_DEVOPS_ORG_URL is missing"; exit 1; }
+          AUTH="$(printf ':%s' "$AZURE_DEVOPS_PAT" | base64 -w0)"
+          echo "::add-mask::$AZURE_DEVOPS_PAT"
+          echo "::add-mask::$AUTH"
+          export AZDO_AUTH="$AUTH"
+          python3 <<'PY'
+          import base64, json, os, re, urllib.error, urllib.parse, urllib.request
+          from datetime import datetime, timezone
+
+          org = os.environ["AZURE_DEVOPS_ORG_URL"].rstrip("/")
+          auth = os.environ["AZDO_AUTH"]
+          allow_write = os.environ.get("ALLOW_MUTATING_PROBES", "false").lower() == "true"
+          headers = {"Authorization": "Basic " + auth, "Accept": "application/json"}
+          results = []
+          context = {"project": None, "pipeline": None, "build": None}
+
+          def safe_url(url):
+              return re.sub(r"([?&](?:token|access_token|authorization)=)[^&]+", r"\1[REDACTED]", url, flags=re.I)
+
+          def request(key, method, path, api="7.1", body=None, accept=None):
+              url = org + path
+              sep = "&" if "?" in url else "?"
+              url += sep + urllib.parse.urlencode({"api-version": api})
+              h = dict(headers)
+              if accept: h["Accept"] = accept
+              data = None if body is None else json.dumps(body).encode()
+              if data is not None: h["Content-Type"] = "application/json"
+              status, ctype, payload, err = None, "", None, None
+              try:
+                  req = urllib.request.Request(url, data=data, headers=h, method=method)
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      status, ctype = resp.status, resp.headers.get("Content-Type", "")
+                      raw = resp.read()
+              except urllib.error.HTTPError as e:
+                  status, ctype, raw = e.code, e.headers.get("Content-Type", ""), e.read()
+              except Exception as e:
+                  raw, err = b"", type(e).__name__ + ": " + str(e)
+              parsed = None
+              if raw:
+                  try: parsed = json.loads(raw)
+                  except Exception: parsed = raw[:600].decode("utf-8", "replace")
+              if status == 203 or "text/html" in ctype.lower():
+                  outcome = "BLOCKED_AUTH_REDIRECT"
+              elif status is not None and 200 <= status < 300:
+                  outcome = "PASS"
+              elif status == 404:
+                  outcome = "NOT_FOUND"
+              elif status in (401, 403):
+                  outcome = "BLOCKED_PERMISSION"
+              else:
+                  outcome = "FAIL" if err or status is None or (status and status >= 400) else "PASS"
+              # Never emit request headers, credentials, or unredacted URL.
+              item = {"id": key, "method": method, "path": path, "api_version": api,
+                      "http_status": status, "content_type": ctype, "outcome": outcome}
+              if err: item["error"] = err[:500]
+              if isinstance(parsed, dict):
+                  item["response_keys"] = list(parsed.keys())[:30]
+                  if "message" in parsed: item["message"] = str(parsed["message"])[:500]
+                  if "typeKey" in parsed: item["typeKey"] = parsed["typeKey"]
+                  if "count" in parsed: item["count"] = parsed["count"]
+                  if isinstance(parsed.get("value"), list):
+                      item["count"] = len(parsed["value"])
+                      item["sample"] = [{k:v for k,v in x.items() if k in ("id","name","state","visibility","defaultBranch","remoteUrl","folder","revision","status","result","buildNumber","queueTime","startTime","finishTime","sourceBranch","lineCount","createdOn","lastChangedOn","isHosted","type","path")} for x in parsed["value"][:10] if isinstance(x,dict)]
+                  if isinstance(parsed.get("records"), list):
+                      item["count"] = len(parsed["records"])
+                      item["sample"] = [{k:v for k,v in x.items() if k in ("id","parentId","type","name","state","result","log","issues")} for x in parsed["records"][:20] if isinstance(x,dict)]
+              elif isinstance(parsed, str): item["body_preview"] = parsed[:250]
+              results.append(item)
+              return status, parsed, item
+
+          # A1 Projects
+          s, p, _ = request("A1","GET","/_apis/projects")
+          projects = p.get("value",[]) if isinstance(p,dict) else []
+          if projects:
+              context["project"] = projects[0]
+          # A2-A4 use first discovered project/pipeline, explicitly report absence.
+          project = context["project"]
+          if project:
+              pname = urllib.parse.quote(project["name"], safe="")
+              s, repos, _ = request("A2","GET",f"/{pname}/_apis/git/repositories")
+              s, pipes, _ = request("A3","GET",f"/{pname}/_apis/pipelines")
+              pipeline_list = pipes.get("value",[]) if isinstance(pipes,dict) else []
+              if pipeline_list:
+                  context["pipeline"] = pipeline_list[0]
+                  request("A4","GET",f"/{pname}/_apis/pipelines/{context['pipeline']['id']}")
+              else:
+                  results.append({"id":"A4","outcome":"BLOCKED_NO_PIPELINE","detail":"No pipeline definition exists in the discovered project"})
+              request("B1","GET",f"/{pname}/_apis/distributedtask/variablegroups")
+              # C1/C2 use first existing build for the selected pipeline.
+              if context["pipeline"]:
+                  _, builds, _ = request("C1","GET",f"/{pname}/_apis/build/builds?definitions={context['pipeline']['id']}&$top=10")
+                  build_list = builds.get("value",[]) if isinstance(builds,dict) else []
+                  if build_list:
+                      context["build"] = build_list[0]
+                      bid = context["build"]["id"]
+                      request("C2","GET",f"/{pname}/_apis/build/builds/{bid}")
+                      request("D1","GET",f"/{pname}/_apis/build/builds/{bid}/timeline")
+                      _, logs, _ = request("D2","GET",f"/{pname}/_apis/build/builds/{bid}/logs")
+                      log_list = logs.get("value",[]) if isinstance(logs,dict) else []
+                      if log_list:
+                          lid = log_list[0]["id"]
+                          request("D3-text","GET",f"/{pname}/_apis/build/builds/{bid}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
+                          request("D3-json","GET",f"/{pname}/_apis/build/builds/{bid}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
+                      else:
+                          results.append({"id":"D3","outcome":"BLOCKED_NO_LOG","detail":"No log record found"})
+                  else:
+                      for key in ("C2","D1","D2","D3"):
+                          results.append({"id":key,"outcome":"BLOCKED_NO_BUILD","detail":"No build exists for discovered pipeline"})
+              else:
+                  for key in ("C1","C2","D1","D2","D3"):
+                      results.append({"id":key,"outcome":"BLOCKED_NO_PIPELINE","detail":"No pipeline definition exists"})
+              request("E1","GET",f"/{pname}/_apis/build/builds/999999999")
+          else:
+              for key in ("A2","A3","A4","B1","C1","C2","D1","D2","D3","E1"):
+                  results.append({"id":key,"outcome":"BLOCKED_NO_PROJECT","detail":"No project returned by A1"})
+          request("A5","GET","/_apis/distributedtask/pools")
+          results.append({"id":"B2","outcome":"NOT_RUN_READ_ONLY","detail":"Mutating probes require allow_mutating_probes=true; no mutation was attempted"})
+          results.append({"id":"C3","outcome":"NOT_RUN_READ_ONLY","detail":"Pipeline queueing is disabled in read-only mode"})
+          results.append({"id":"C4","outcome":"NOT_RUN_READ_ONLY","detail":"Build cancellation is disabled in read-only mode"})
+          results.append({"id":"E2","outcome":"PARTIAL","detail":"203/HTML detection is implemented in the probe helper; invalid PAT is not deliberately tested to avoid credential lockout or false diagnosis"})
+          print(json.dumps({"generated_at":datetime.now(timezone.utc).isoformat(),
+              "org_host":urllib.parse.urlparse(org).hostname,
+              "project_found":bool(project),
+              "project":({k:project.get(k) for k in ("id","name","state","visibility")} if project else None),
+              "pipeline":({k:context["pipeline"].get(k) for k in ("id","name","folder","revision","url")} if context["pipeline"] else None),
+              "build":({k:context["build"].get(k) for k in ("id","buildNumber","status","result","sourceBranch")} if context["build"] else None),
+              "mutating_enabled":allow_write,"results":results},indent=2))
+          PY

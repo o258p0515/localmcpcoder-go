@@ -53,7 +53,7 @@ wait_http 8787
 wait_http 8788
 mcp_call() {
   local port="$1" payload="$2"
-  curl -fsS "http://127.0.0.1:$port/mcp" \
+  curl -sS --max-time 330 "http://127.0.0.1:$port/mcp" \
     -H "Authorization: Bearer $MCP_TOKEN" \
     -H "Content-Type: application/json" -H "Accept: application/json" \
     --data "$payload"

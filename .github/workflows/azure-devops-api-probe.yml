@@ -112,7 +112,7 @@ jobs:
                   with urllib.request.urlopen(req,timeout=35) as rr: code=rr.status; raw=rr.read(); ct=rr.headers.get("Content-Type","")
                 except urllib.error.HTTPError as ee: code=ee.code; raw=ee.read(); ct=ee.headers.get("Content-Type","")
                 try: doc=json.loads(raw) if raw else {}
-                except: doc={"preview":raw[:500].decode("utf8","replace")}
+                except: doc={"preview":raw[:500].decode("utf8","replace"),"line_count":len(raw.decode("utf8","replace").splitlines())}
                 summary={k:v for k,v in doc.items() if k in ("id","name","state","result","status","url","revision","message","typeKey","count","value","configuration","folder","path","preview")} if isinstance(doc,dict) else {"preview":str(doc)[:500]}
                 if isinstance(summary,dict) and isinstance(summary.get("value"),list):
                   summary["count"]=len(summary["value"])
@@ -127,14 +127,22 @@ jobs:
               try:
                 zero="0000000000000000000000000000000000000000"
                 # Restore a valid default branch after the first bootstrap probe left a deleted branch as default.
-                _,repo_state=api("PIPELINE-repository-state-before-restore","GET",f"/{pname}/_apis/git/repositories/{rid}")
-                if isinstance(repo_state,dict) and str(repo_state.get("defaultBranch","")).startswith("refs/heads/issue69-probe-"):
-                  restore_commit="a70d6c605d4eee68cce4a682ddb4b32d4f3ad60e"
-                  restore_push={"refUpdates":[{"name":"refs/heads/main","oldObjectId":zero}],"commits":[{"comment":"Restore empty Azure Repo default branch after Issue 69 probe cleanup","parents":[restore_commit],"changes":[{"changeType":"delete","item":{"path":"/.azure-pipelines/issue69-probe.yml"}}]}]}
-                  restore_code,_=api("PIPELINE-restore-empty-main","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",restore_push)
-                  if 200<=restore_code<300:
-                    api("PIPELINE-set-default-main","PATCH",f"/{pname}/_apis/git/repositories/{rid}",{"defaultBranch":"refs/heads/main"})
-                    api("PIPELINE-verify-default-main","GET",f"/{pname}/_apis/git/repositories/{rid}")
+                if str(repo.get("defaultBranch","")).startswith("refs/heads/issue69-probe-"):
+                  _,main_refs=api("PIPELINE-check-main-ref","GET",f"/{pname}/_apis/git/repositories/{rid}/refs?filter=heads/main")
+                  has_main=bool(main_refs.get("value",[])) if isinstance(main_refs,dict) else False
+                  if not has_main:
+                    bootstrap_path="/.issue69-empty-repo-bootstrap"
+                    bootstrap_push={"refUpdates":[{"name":"refs/heads/main","oldObjectId":zero}],"commits":[{"comment":"Restore empty Azure Repo main branch after Issue 69 probe cleanup","parents":[],"changes":[{"changeType":"add","item":{"path":bootstrap_path},"newContent":{"content":"temporary bootstrap file","contentType":"rawtext"}}]}]}
+                    bootstrap_code,_=api("PIPELINE-create-restored-main","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",bootstrap_push)
+                    if 200<=bootstrap_code<300:
+                      api("PIPELINE-set-default-main","PATCH",f"/{pname}/_apis/git/repositories/{rid}",{"defaultBranch":"refs/heads/main"})
+                      _,verify_repo=api("PIPELINE-verify-default-main","GET",f"/{pname}/_apis/git/repositories/{rid}")
+                      _,main_refs=api("PIPELINE-read-restored-main","GET",f"/{pname}/_apis/git/repositories/{rid}/refs?filter=heads/main")
+                      main_items=main_refs.get("value",[]) if isinstance(main_refs,dict) else []
+                      main_ref=next((x for x in main_items if x.get("name")=="refs/heads/main"),None)
+                      if main_ref and isinstance(verify_repo,dict):
+                        cleanup_push={"refUpdates":[{"name":"refs/heads/main","oldObjectId":main_ref["objectId"]}],"commits":[{"comment":"Remove temporary Issue 69 repository bootstrap file","parents":[main_ref["objectId"]],"changes":[{"changeType":"delete","item":{"path":bootstrap_path}}]}]}
+                        api("PIPELINE-remove-bootstrap-file","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",cleanup_push)
                 # Clean up resources left by an interrupted earlier probe before creating this run's assets.
                 _,old_pipelines=api("PIPELINE-stale-list","GET",f"/{pname}/_apis/pipelines")
                 for stale in (old_pipelines.get("value",[]) if isinstance(old_pipelines,dict) else []):
@@ -178,12 +186,12 @@ jobs:
                     def inspect_logs(phase):
                       timeline=None
                       records=[]
-                      for attempt in range(10 if live else 1):
+                      for attempt in range(30 if live else 1):
                         _,timeline=api("D1-"+phase+"-timeline","GET",f"/{pname}/_apis/build/builds/{run_id}/timeline")
                         records=timeline.get("records",[]) if isinstance(timeline,dict) else []
                         task=next((x for x in records if x.get("type")=="Task" and "Issue 69" in str(x.get("name","")) and isinstance(x.get("log"),dict) and x["log"].get("id")),None)
                         if task: break
-                        if live: time.sleep(2)
+                        if live: time.sleep(3)
                       _,logs=api("D2-"+phase+"-logs","GET",f"/{pname}/_apis/build/builds/{run_id}/logs")
                       items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
                       lid=task["log"]["id"] if task else (items[-1]["id"] if items else None)

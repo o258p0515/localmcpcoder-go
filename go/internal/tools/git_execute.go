@@ -160,7 +160,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		} else if !os.IsNotExist(err) {
 			return fail("cannot inspect private Git metadata")
 		}
-		args = append(args, "clone", "--separate-git-dir="+gitDir, "--", val(a, "repository"), repoPath)
+		args = append(args, "clone", "--separate-git-dir="+gitDir, "--", credentialRepository, repoPath)
 	} else {
 		args = append(args, "--git-dir="+gitDir, "--work-tree="+repoPath)
 		switch op {

@@ -84,19 +84,31 @@ jobs:
           echo "$BASH_TEXT" | grep -q 'mcp-workspace'
           echo "Normal bash call auto-routed to the Agent OS user."
 
-          GIT_CALL=$(jq -cn '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:"public-shared"}}}')
+          WORKTREE="public-shared-$GITHUB_RUN_ID"
+          CLONE_CALL=$(jq -cn --arg dest "$WORKTREE" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/localmcpcoder-go.git",destination:$dest}}}')
+          CLONE_RESULT=$(mcp_call "$CLONE_CALL")
+          jq -e '.result.isError != true and .error == null' <<<"$CLONE_RESULT" >/dev/null
+          echo "E2E created its own fresh clone in $WORKTREE."
+
+          CREATE_COMMAND="printf 'agent-created\\n' > '$WORKTREE/issue23-shared-workspace.txt'"
+          CREATE_FILE=$(jq -cn --arg command "$CREATE_COMMAND" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')
+          CREATE_RESULT=$(mcp_call "$CREATE_FILE")
+          jq -e '.result.isError != true and .error == null' <<<"$CREATE_RESULT" >/dev/null
+          echo "Agent runner wrote a new file into the Git runner's shared worktree."
+
+          GIT_CALL=$(jq -cn --arg path "$WORKTREE" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:$path}}}')
           GIT_RESULT=$(mcp_call "$GIT_CALL")
           jq -e '.result.isError != true and .error == null' <<<"$GIT_RESULT" >/dev/null
           GIT_TEXT=$(echo "$GIT_RESULT" | jq -r '.result.content[]?.text // empty')
           echo "$GIT_TEXT" | grep -q 'issue23-shared-workspace.txt'
-          echo "git_execute auto-routed to the isolated Git runner and saw the Agent-created shared file."
+          echo "git_execute auto-routed to the isolated Git runner and saw the Agent-created file in the freshly cloned repo."
 
-          GIT_BASH=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"id",runner_id:$g}}}')
+          GIT_BASH=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:"id",runner_id:$g}}}')
           GIT_BASH_RESULT=$(mcp_call "$GIT_BASH")
           jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH_RESULT" >/dev/null
           echo "Explicit Git runner rejects Bash as expected."
 
-          SELECT_GIT=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$g}}}')
+          SELECT_GIT=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:9,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$g}}}')
           mcp_call "$SELECT_GIT" | jq -e '.result.isError != true and .error == null' >/dev/null
           BASH_AGAIN=$(mcp_call "$BASH_CALL")
           echo "$BASH_AGAIN" | jq -r '.result.content[]?.text // empty' | grep -q 'mcp-agent'
@@ -104,7 +116,7 @@ jobs:
           jq -e '.result.isError != true and .error == null' <<<"$GIT_AGAIN" >/dev/null
           echo "Tool-role routing overrides an incompatible session pin while preserving the paired roles."
 
-          if grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$TOOLS$BASH_RESULT$GIT_RESULT$GIT_BASH_RESULT$BASH_AGAIN$GIT_AGAIN"; then
+          if grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$TOOLS$BASH_RESULT$CLONE_RESULT$CREATE_RESULT$GIT_RESULT$GIT_BASH_RESULT$BASH_AGAIN$GIT_AGAIN"; then
             echo "::error::Credential-like value found in MCP response"
             exit 1
           fi

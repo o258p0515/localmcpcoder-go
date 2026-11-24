@@ -168,6 +168,42 @@ describe("MCP Hub routing", () => {
     expect(calls.map((call) => call.runnerId)).toEqual(["git-1", "agent-1"]);
   });
 
+  it("routes multiple concurrent Agent/Git pairs by their shared pair tag", async () => {
+    const { env, runnerCalls } = fakeEnv({
+      runners: [
+        { runner_id: "agent-1", tags: ["linux", "agent", "pair:pool-1"], status: "online" },
+        { runner_id: "git-1", tags: ["linux", "git", "isolated", "pair:pool-1"], status: "online" },
+        { runner_id: "agent-2", tags: ["linux", "agent", "pair:pool-2"], status: "online" },
+        { runner_id: "git-2", tags: ["linux", "git", "isolated", "pair:pool-2"], status: "online" }
+      ]
+    });
+    const call = (id: number, name: string, arguments_: any) =>
+      handleMcp(request({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: arguments_ } }), env, "session-1");
+    await call(1, "select_runner", { runner_id: "agent-1" });
+    await call(2, "git_execute", { operation: "status", account: "personal" });
+    await call(3, "bash", { command: "id" });
+    await call(4, "select_runner", { runner_id: "git-2" });
+    await call(5, "git_execute", { operation: "status", account: "personal" });
+    await call(6, "bash", { command: "id" });
+    const calls = runnerCalls.filter((entry) => entry.body.payload?.method === "tools/call");
+    expect(calls.map((entry) => entry.runnerId)).toEqual(["git-1", "agent-1", "git-2", "agent-2"]);
+  });
+
+  it("does not guess a pair when multiple untagged Git runners are online", async () => {
+    const { env } = fakeEnv({
+      runners: [
+        { runner_id: "agent-1", tags: ["agent"], status: "online" },
+        { runner_id: "git-1", tags: ["git", "isolated"], status: "online" },
+        { runner_id: "git-2", tags: ["git", "isolated"], status: "online" }
+      ]
+    });
+    await handleMcp(request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "select_runner", arguments: { runner_id: "agent-1" } } }), env, "session-1");
+    const response = await handleMcp(request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "git_execute", arguments: { operation: "status", account: "personal" } } }), env, "session-1");
+    const body = await response.json() as any;
+    expect(body.result.isError).toBe(true);
+    expect(body.result.content[0].text).toContain("Multiple isolated Git runners");
+  });
+
   it("returns the full async job status and result without unwrapping its result field", async () => {
     const { env } = fakeEnv();
     const response = await handleMcp(request({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "get_job_result", arguments: { runner_id: "r1", job_id: "job-1" } } }), env, "session-1");

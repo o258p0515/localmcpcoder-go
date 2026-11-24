@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"strings"\n\t"strconv"
 	"testing"
 
 	"github.com/o258p0515/localmcpcoder-go/go/internal/config"
@@ -67,7 +67,7 @@ func TestGitExecutorSchemaHasNoCredentialFields(t *testing.T) {
 	if !foundCheckout {
 		t.Fatal("checkout operation missing from schema")
 	}
-	if _, ok := props["dry_run"]; !ok {
+	if paths, ok := props["paths"].(map[string]any); !ok || paths["type"] != "array" || paths["maxItems"] != 100 {\n\t\tt.Fatal("optional scoped commit paths missing from schema")\n\t}\n\tif _, ok := props["dry_run"]; !ok {
 		t.Fatal("dry_run option missing from schema")
 	}
 }
@@ -282,9 +282,35 @@ func TestMakeSharedWorkspaceGroupWritable(t *testing.T) {
 	for _, dir := range []string{root, nested} {
 		info, err := os.Stat(dir)
 		if err != nil { t.Fatal(err) }
-		if info.Mode().Perm() != 0770 { t.Fatalf("directory %s must be group-writable; got %v", dir, info.Mode()) }
+		if info.Mode().Perm() != 0770 || info.Mode()&os.ModeSetgid == 0 || info.Mode()&os.ModeSticky == 0 { t.Fatalf("directory %s must have setgid+sticky and 0770 permissions; got %v", dir, info.Mode()) }
 	}
 	info, err := os.Stat(file)
 	if err != nil { t.Fatal(err) }
 	if info.Mode().Perm()&0060 != 0060 || info.Mode().Perm()&0007 != 0 { t.Fatalf("file must be group-readable/writable and not world-accessible; got %v", info.Mode()) }
+}
+
+func TestValidateGitCommitPaths(t *testing.T) {
+	root := t.TempDir()
+	got, err := validateGitCommitPaths(root, []any{"README.md", "src/main.go", "README.md"})
+	if err != nil { t.Fatal(err) }
+	if len(got) != 2 || got[0] != "README.md" || got[1] != filepath.Join("src", "main.go") {
+		t.Fatalf("unexpected normalized paths: %#v", got)
+	}
+	for _, raw := range []any{
+		[]any{"../outside"},
+		[]any{".git/config"},
+		[]any{"/etc/passwd"},
+		[]any{""},
+		[]any{1},
+		[]any{},
+	} {
+		if _, err := validateGitCommitPaths(root, raw); err == nil {
+			t.Errorf("accepted unsafe or invalid commit paths: %#v", raw)
+		}
+	}
+	tooMany := make([]any, 101)
+	for i := range tooMany { tooMany[i] = "file-" + strconv.Itoa(i) }
+	if _, err := validateGitCommitPaths(root, tooMany); err == nil {
+		t.Fatal("accepted more than 100 commit paths")
+	}
 }

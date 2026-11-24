@@ -68,7 +68,11 @@ GIT_BASH="$(mcp_call 8788 '{"jsonrpc":"2.0","id":11,"method":"tools/call","param
 jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH" >/dev/null
 checkpoint "private-clone-using-dedicated-executor-token"
 PRIVATE_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/kiem-thu.git",destination:"private-empty"}}}')")"
-jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_CLONE" >/dev/null
+if ! jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_CLONE" >/dev/null; then
+  echo "Private clone failed; sanitized MCP error follows:" >&2
+  jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$PRIVATE_CLONE" >&2
+  exit 1
+fi
 ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PRIVATE_CLONE"
 test ! -e "$ROOT/private-empty/.git"
 checkpoint "public-clone-and-agent-shared-workspace"

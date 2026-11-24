@@ -1,4 +1,5 @@
 import type { Env, RunnerInfo } from "./types";
+import { pairedRunner } from "./runner-pairing";
 import { injectRunnerArguments, stripRunnerArguments } from "./schema-injector";
 import { runnerToolCatalog } from "./tool-catalog";
 
@@ -29,17 +30,6 @@ async function runnerRequest(env: Env, id: string, path: string, body?: unknown)
   const data = await response.json() as any;
   if (!response.ok) throw new Error(data.error ?? "runner request failed");
   return path.startsWith("job?") ? data : (data.result ?? data);
-}
-
-function pairKey(runner: RunnerInfo | undefined): string | undefined {
-  return runner?.tags?.find((tag) => tag.startsWith("pair:") && tag.length > 5)?.slice(5);
-}
-
-function pairedRunner(source: RunnerInfo | undefined, candidates: RunnerInfo[]): RunnerInfo | undefined {
-  const key = pairKey(source);
-  if (!key) return undefined;
-  const matches = candidates.filter((candidate) => pairKey(candidate) === key);
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function metaTools() {

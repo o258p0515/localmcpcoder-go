@@ -134,7 +134,7 @@ jobs:
           echo "Admin runner registry: $ADMIN"
           echo "Hub endpoint smoke tests passed: https://$HUB_DOMAIN/mcp"
       - name: Multi-runner end-to-end test (two local Go processes)
-        if: github.event_name == 'workflow_dispatch' && inputs.run_e2e
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_e2e)
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           RUNNER_TEMP: ${{ runner.temp }}

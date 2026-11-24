@@ -201,8 +201,8 @@ func TestGitSafeEnvUsesMinimalAllowlist(t *testing.T) {
 		"PATH=/usr/bin",
 		"GIT_EXECUTOR_TOKEN=must-not-reach-git",
 		"MCP_TOKEN=also-private",
-		"HTTP_PROXY=http://proxy.invalid",
-		"http_proxy=http://lower-proxy.invalid",
+		"HTTP_PROXY=http://proxy.invalid",\n\t\t"HTTPS_PROXY=http://proxy.invalid",\n\t\t"ALL_PROXY=http://proxy.invalid",
+		"http_proxy=http://lower-proxy.invalid",\n\t\t"all_proxy=http://lower-proxy.invalid",
 		"https_proxy=http://lower-proxy.invalid",
 		"NO_PROXY=localhost",
 		"AWS_SECRET_ACCESS_KEY=must-not-reach-git",
@@ -210,7 +210,7 @@ func TestGitSafeEnvUsesMinimalAllowlist(t *testing.T) {
 		"LANG=C.UTF-8",
 	})
 	joined := strings.Join(env, "\n")
-	for _, forbidden := range []string{"GIT_EXECUTOR_TOKEN=", "MCP_TOKEN=", "HTTP_PROXY=", "http_proxy=", "https_proxy=", "NO_PROXY=", "AWS_SECRET_ACCESS_KEY="} {
+	for _, forbidden := range []string{"GIT_EXECUTOR_TOKEN=", "MCP_TOKEN=", "HTTP_PROXY=", "HTTPS_PROXY=", "ALL_PROXY=", "http_proxy=", "https_proxy=", "all_proxy=", "NO_PROXY=", "AWS_SECRET_ACCESS_KEY="} {
 		if strings.Contains(joined, forbidden) { t.Fatalf("sensitive environment variable leaked: %s", forbidden) }
 	}
 	if !strings.Contains(joined, "PATH=/usr/bin") || !strings.Contains(joined, "HOME=/home/mcp-git") {
@@ -286,7 +286,9 @@ func TestMakeSharedWorkspaceGroupWritable(t *testing.T) {
 	for _, dir := range []string{root, nested} {
 		info, err := os.Stat(dir)
 		if err != nil { t.Fatal(err) }
-		if info.Mode().Perm() != 0770 || info.Mode()&os.ModeSetgid == 0 || info.Mode()&os.ModeSticky == 0 { t.Fatalf("directory %s must have setgid+sticky and 0770 permissions; got %v", dir, info.Mode()) }
+		if info.Mode().Perm() != 0770 || info.Mode()&os.ModeSetgid == 0 { t.Fatalf("directory %s must have setgid and 0770 permissions; got %v", dir, info.Mode()) }
+		if dir == root && info.Mode()&os.ModeSticky == 0 { t.Fatalf("shared workspace root must have sticky bit; got %v", info.Mode()) }
+		if dir == nested && info.Mode()&os.ModeSticky != 0 { t.Fatalf("nested repository directories must not have sticky bit; got %v", info.Mode()) }
 	}
 	info, err := os.Stat(file)
 	if err != nil { t.Fatal(err) }

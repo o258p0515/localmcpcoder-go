@@ -51,16 +51,17 @@ export default {
       const rows = (data.result ?? []).map((r: any) => `<tr><td>${escapeHtml(r.runner_id)}</td><td>${escapeHtml(r.os)}/${escapeHtml(r.arch)}</td><td>${escapeHtml(r.status)}</td><td>${escapeHtml((r.tags ?? []).join(", "))}</td><td>${new Date(r.connected_at).toISOString()}</td></tr>`).join("");
       return withCors(new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>LocalMCP Hub</title><style>body{font:15px system-ui;margin:2rem;background:#f6f7f9;color:#17202a}table{border-collapse:collapse;background:white;width:100%}td,th{padding:.7rem;border:1px solid #ddd;text-align:left}h1{font-size:1.5rem}</style></head><body><h1>LocalMCP Hub runners</h1><table><thead><tr><th>Runner</th><th>Platform</th><th>Status</th><th>Tags</th><th>Connected</th></tr></thead><tbody>${rows || "<tr><td colspan=5>No runners connected</td></tr>"}</tbody></table></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8" } }));
     }
-    if (url.pathname === "/.well-known/oauth-authorization-server") {
+    if (url.pathname === "/.well-known/oauth-authorization-server" || url.pathname === "/.well-known/openid-configuration") {
       const issuer = url.origin;
       return withCors(Response.json({
         issuer,
         authorization_endpoint: issuer + "/authorize",
         token_endpoint: issuer + "/token",
+        registration_endpoint: issuer + "/register",
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
-        token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
+        token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
         scopes_supported: ["mcp:tools"]
       }));
     }
@@ -72,7 +73,7 @@ export default {
         scopes_supported: ["mcp:tools"]
       }));
     }
-    if (url.pathname === "/authorize" || url.pathname === "/token") {
+    if (url.pathname === "/register" || url.pathname === "/authorize" || url.pathname === "/token") {
       return withCors(await handleOAuthRequest(request, env));
     }
     if (url.pathname === "/mcp") {

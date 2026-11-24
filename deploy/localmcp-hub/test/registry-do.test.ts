@@ -6,6 +6,7 @@ class RegistrySQL {
   runners = new Map<string, any>();
   sessions = new Map<string, string>();
   grants = new Map<string, { grant_type: string; expires_at: number }>();
+  clients = new Map<string, any>();
   exec(query: string, ...args: any[]) {
     if (query.startsWith("INSERT INTO runners")) {
       const [id, os, arch, repo, tags_json, connected_at] = args;
@@ -45,6 +46,19 @@ class RegistrySQL {
     }
     if (query.startsWith("DELETE FROM oauth_grants WHERE jti")) {
       const deleted = this.grants.delete(args[0]); return { rowsWritten: deleted ? 1 : 0, toArray: () => [] };
+    }
+    if (query.startsWith("DELETE FROM oauth_clients WHERE expires_at")) {
+      let count = 0; for (const [id, client] of this.clients) if (client.expires_at <= args[0]) { this.clients.delete(id); count++; }
+      return { rowsWritten: count, toArray: () => [] };
+    }
+    if (query.startsWith("INSERT OR REPLACE INTO oauth_clients")) {
+      const [client_id, client_name, token_endpoint_auth_method, client_secret_hash, redirect_uris_json, created_at, expires_at] = args;
+      this.clients.set(client_id, { client_id, client_name, token_endpoint_auth_method, client_secret_hash, redirect_uris_json, created_at, expires_at });
+      return { rowsWritten: 1, toArray: () => [] };
+    }
+    if (query.startsWith("SELECT client_id,client_name")) {
+      const client = this.clients.get(args[0]);
+      return { rowsWritten: 0, toArray: () => client && client.expires_at > args[1] ? [client] : [] };
     }
     if (query.startsWith("INSERT INTO session_targets")) {
       this.sessions.set(args[0], args[1]); return { rowsWritten: 1, toArray: () => [] };
@@ -94,6 +108,26 @@ describe("RegistryDO", () => {
     expect((await (await action(registry, { action: "consumeOAuthGrant", jti: "code-1", grant_type: "code" })).json() as any).result.consumed).toBe(true);
     expect((await (await action(registry, { action: "consumeOAuthGrant", jti: "code-1", grant_type: "code" })).json() as any).result.consumed).toBe(false);
     expect(sql.grants.size).toBe(0);
+  });
+  it("stores and retrieves DCR OAuth clients", async () => {
+    const { registry } = makeRegistry();
+    const expiry = Date.now() + 60_000;
+    const reg = await action(registry, {
+      action: "registerOAuthClient",
+      client_id: "dcr_abc",
+      client_name: "ChatGPT App",
+      token_endpoint_auth_method: "none",
+      redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+      expires_at: expiry
+    });
+    expect((await reg.json() as any).result.registered).toBe(true);
+    const fetched = await action(registry, { action: "getOAuthClient", client_id: "dcr_abc" });
+    expect((await fetched.json() as any).result).toMatchObject({
+      client_id: "dcr_abc",
+      client_name: "ChatGPT App",
+      token_endpoint_auth_method: "none",
+      redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"]
+    });
   });
   it("lists runners in most-recently-connected order", async () => {
     const { registry } = makeRegistry();

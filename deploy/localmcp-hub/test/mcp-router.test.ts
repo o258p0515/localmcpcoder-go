@@ -129,6 +129,46 @@ describe("MCP Hub routing", () => {
     expect(bash.inputSchema.properties.async.type).toBe("boolean");
   });
 
+  it("keeps the selected runner scoped to its MCP session and routes default calls there", async () => {
+    const { env, runnerCalls } = fakeEnv({
+      runners: [
+        { runner_id: "r1", os: "linux", arch: "amd64", status: "online" },
+        { runner_id: "r2", os: "linux", arch: "amd64", status: "online" }
+      ]
+    });
+
+    const select = await handleMcp(
+      request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "select_runner", arguments: { runner_id: "r2" } } }),
+      env,
+      "session-a"
+    );
+    expect((await select.json() as any).result.isError).not.toBe(true);
+
+    const sameSessionList = await handleMcp(
+      request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_runners", arguments: {} } }, "session-a"),
+      env,
+      "session-a"
+    );
+    const sameSessionState = JSON.parse((await sameSessionList.json() as any).result.content[0].text);
+    expect(sameSessionState.selected_runner).toBe("r2");
+
+    const otherSessionList = await handleMcp(
+      request({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_runners", arguments: {} } }, "session-b"),
+      env,
+      "session-b"
+    );
+    const otherSessionState = JSON.parse((await otherSessionList.json() as any).result.content[0].text);
+    expect(otherSessionState.selected_runner).toBeNull();
+
+    const defaultCall = await handleMcp(
+      request({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "bash", arguments: { command: "hostname" } } }, "session-a"),
+      env,
+      "session-a"
+    );
+    expect((await defaultCall.json() as any).result.isError).not.toBe(true);
+    expect(runnerCalls.find((call) => call.body.payload?.method === "tools/call")?.runnerId).toBe("r2");
+  });
+
   it("returns the full async job status and result without unwrapping its result field", async () => {
     const { env } = fakeEnv();
     const response = await handleMcp(request({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "get_job_result", arguments: { runner_id: "r1", job_id: "job-1" } } }), env, "session-1");

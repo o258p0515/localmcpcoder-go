@@ -114,7 +114,7 @@ func TestGitCommitPathspecs(t *testing.T) {
 func TestGitCommitPathspecsRejectTraversalAndSymlinkParents(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil { t.Skipf("symlink unavailable: %v", err) }
-	for _, value := range []any{[]any{"../outside"}, []any{"/etc/passwd"}, []any{"linked/secret.txt"}, []any{""}, []any{strings.Repeat("a", 1)}} {
+	for _, value := range []any{[]any{"../outside"}, []any{"/etc/passwd"}, []any{"linked/secret.txt"}, []any{""}, []any{}, "not-an-array"} {
 		if _, err := gitCommitPathspecs(root, value); err == nil { t.Errorf("accepted unsafe path input %#v", value) }
 	}
 }

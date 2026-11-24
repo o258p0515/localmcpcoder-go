@@ -210,7 +210,8 @@ jobs:
                       lid=task["log"]["id"] if task else (items[-1]["id"] if items else None)
                       if lid:
                         api("D3-"+phase+"-text-page1","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=5",accept="text/plain")
-                        api("D3-"+phase+"-text-page2","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=6&endLine=10",accept="text/plain")\n                        api("D3-"+phase+"-text-page3","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=11&endLine=20",accept="text/plain")
+                        api("D3-"+phase+"-text-page2","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=6&endLine=10",accept="text/plain")
+                        api("D3-"+phase+"-text-page3","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=11&endLine=20",accept="text/plain")
                         api("D3-"+phase+"-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=5",accept="application/json")
                       else: print(json.dumps({"probe":"D3-"+phase,"result":"BLOCKED_NO_STEP_LOG","records_count":len(records),"logs_count":len(items)}))
                     current=None

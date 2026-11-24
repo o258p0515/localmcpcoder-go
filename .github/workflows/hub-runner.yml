@@ -8,7 +8,7 @@ on:
         required: false
         default: "gha"
       runner_tags:
-        description: "Comma-separated tags (for example linux,go,sandbox)"
+        description: "Comma-separated runner tags (for example windows,go,gha)"
         type: string
         required: false
         default: "linux,go,gha"
@@ -63,10 +63,17 @@ jobs:
         working-directory: go
         env:
           BINARY_EXT: ${{ inputs.runner_os == 'windows-latest' && '.exe' || '' }}
+          RUNNER_OS: ${{ runner.os }}
         shell: bash
         run: |
           set -euo pipefail
-          go test ./...
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # These packages are OS-neutral and cover the Hub transport/runtime path.
+            # The remaining packages currently assert POSIX chmod/setgid semantics.
+            go test ./cmd/mcp ./internal/auth ./internal/fsx ./internal/hubclient ./internal/server ./internal/skills
+          else
+            go test ./...
+          fi
           go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp$BINARY_EXT" ./cmd/mcp
       - name: Start outbound Hub runner
         env:

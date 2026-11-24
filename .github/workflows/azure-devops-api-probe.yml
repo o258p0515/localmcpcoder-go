@@ -8,7 +8,7 @@ name: Azure DevOps REST API Probe
         type: boolean
         default: false
       run_preview_e2e:
-        description: "Run the live Issue 68 preview E2E (requires rotated Azure PAT and configured HUB_URLS)"
+        description: "Run live Issue 68 E2E against the isolated preview; Hub URL has a safe code default"
         required: false
         type: boolean
         default: false
@@ -320,15 +320,40 @@ jobs:
             print(json.dumps({"probe":"C4","result":"NOT_RUN_READ_ONLY"}))
           print(json.dumps({"probe":"E2","result":"PARTIAL","detail":"203 and HTML login responses are classified as blocked; invalid PAT is not intentionally tested"}))
           PY
+      - name: Setup Node for isolated preview deployment
+        if: ${{ inputs.run_preview_e2e }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Deploy isolated Proxy preview from Issue 68 branch
+        if: ${{ inputs.run_preview_e2e }}
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          GIT_EXECUTOR_TOKEN: ${{ secrets.GIT_EXECUTOR_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_OAUTH_CLIENT_SECRET: ${{ secrets.MCP_OAUTH_CLIENT_SECRET }}
+          RTDB_URL: ${{ secrets.RTDB_URL }}
+          RTDB_AUTH_URL: ${{ secrets.RTDB_AUTH_URL }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON_B64 }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch feature/issue-68-azure-devops-runner https://github.com/o258p0515/cf-worker-proxy-mcp.git proxy-e2e
+          cd proxy-e2e
+          npm ci
+          node scripts/prepare-preview.mjs
+          npx wrangler deploy --config wrangler.preview.jsonc
+          node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.preview.jsonc
       - name: Live Azure DevOps runner E2E against Issue 68 preview
         if: ${{ inputs.run_preview_e2e }}
         env:
-          PREVIEW_DOMAIN: https://github-mcp-proxy-issue68-preview.localmcpcoder-5b1b15.workers.dev
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$MCP_TOKEN"
           echo "::add-mask::$MCP_TOKEN"
-          git clone --depth 1 --branch feature/issue-68-azure-devops-runner https://github.com/o258p0515/cf-worker-proxy-mcp.git proxy-e2e
           node --check proxy-e2e/scripts/azure-preview-e2e.mjs
           node proxy-e2e/scripts/azure-preview-e2e.mjs

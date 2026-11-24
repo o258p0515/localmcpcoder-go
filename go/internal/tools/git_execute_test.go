@@ -98,6 +98,27 @@ func TestGitExecuteRejectsMissingExecutorTokenWithoutLeakingSecrets(t *testing.T
 		t.Fatalf("unexpected error: %s", got)
 	}
 }
+func TestGitCommitPathspecs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dir"), 0700); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(root, "dir", "a.txt"), []byte("a"), 0600); err != nil { t.Fatal(err) }
+	got, err := gitCommitPathspecs(root, []any{"dir/a.txt", "name[1].txt"})
+	if err != nil { t.Fatal(err) }
+	if len(got) != 2 || got[0] != ":(literal)dir/a.txt" || got[1] != ":(literal)name[1].txt" {
+		t.Fatalf("unexpected literal pathspecs: %#v", got)
+	}
+	all, err := gitCommitPathspecs(root, nil)
+	if err != nil || len(all) != 1 || all[0] != ":(literal)." { t.Fatalf("default should stage all: %#v err=%v", all, err) }
+}
+
+func TestGitCommitPathspecsRejectTraversalAndSymlinkParents(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil { t.Skipf("symlink unavailable: %v", err) }
+	for _, value := range []any{[]any{"../outside"}, []any{"/etc/passwd"}, []any{"linked/secret.txt"}, []any{""}, []any{strings.Repeat("a", 1)}} {
+		if _, err := gitCommitPathspecs(root, value); err == nil { t.Errorf("accepted unsafe path input %#v", value) }
+	}
+}
+
 func TestWithinRoot(t *testing.T) {
 	root := t.TempDir()
 	if !withinRoot(root, filepath.Join(root, "repo")) {

@@ -1,0 +1,111 @@
+name: Issue 23 Hub Git Pair E2E
+on:
+  workflow_dispatch:
+    inputs:
+      agent_runner_id:
+        description: Online Agent runner ID
+        required: true
+        type: string
+      git_runner_id:
+        description: Online isolated Git runner ID
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: issue23-hub-git-pair-e2e-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Resolve Hub endpoint and access tokens
+        working-directory: deploy/localmcp-hub
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+        run: node scripts/derive-runner-env.mjs
+      - name: Verify paired Git tool discovery and role-aware routing
+        env:
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          AGENT_RUNNER_ID: ${{ inputs.agent_runner_id }}
+          GIT_RUNNER_ID: ${{ inputs.git_runner_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="https://$HUB_DOMAIN"
+          curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/issue23-runners.json
+          jq -e --arg a "$AGENT_RUNNER_ID" --arg g "$GIT_RUNNER_ID" '
+            any(.[]; .runner_id == $a and .status == "online" and ((.tags // []) | index("agent") != null)) and
+            any(.[]; .runner_id == $g and .status == "online" and ((.tags // []) | index("git") != null) and ((.tags // []) | index("isolated") != null))
+          ' /tmp/issue23-runners.json >/dev/null
+          echo "Hub registry confirms the requested Agent and isolated Git runners are online."
+
+          curl --fail --silent --show-error -D /tmp/issue23-init.headers -o /tmp/issue23-init.json \
+            -X POST "$BASE_URL/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"issue23-git-pair-e2e","version":"1"}}}'
+          SESSION_ID=$(awk -F': ' 'tolower($1)=="mcp-session-id" {gsub("\\r","",$2); print $2}' /tmp/issue23-init.headers | tail -n1)
+          test -n "$SESSION_ID"
+          jq -e '.result.serverInfo.name == "localmcp-hub"' /tmp/issue23-init.json >/dev/null
+          mcp_call() {
+            curl --fail --silent --show-error -X POST "$BASE_URL/mcp" \
+              -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+              -H "Mcp-Session-Id: $SESSION_ID" --data "$1"
+          }
+
+          TOOLS=$(mcp_call '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+          echo "$TOOLS" | jq -e '
+            .result.tools[] | select(.name == "git_execute") |
+            ((.inputSchema // .input_schema) as $s |
+              ($s.required | index("operation") != null) and
+              ($s.required | index("account") != null) and
+              (($s.properties // {}) | has("token") | not) and
+              (($s.properties // {}) | has("credential") | not) and
+              (($s.properties.operation.enum | index("clone")) != null))
+          ' >/dev/null
+          echo "tools/list exposes credential-free git_execute schema."
+
+          SELECT_AGENT=$(jq -cn --arg a "$AGENT_RUNNER_ID" '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$a}}}')
+          mcp_call "$SELECT_AGENT" | jq -e '.result.isError != true and .error == null' >/dev/null
+          BASH_CALL=$(jq -cn '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{command:"id -un; id -gn"}}}')
+          BASH_RESULT=$(mcp_call "$BASH_CALL")
+          BASH_TEXT=$(echo "$BASH_RESULT" | jq -r '.result.content[]?.text // .error.message // empty')
+          echo "$BASH_TEXT" | grep -q 'mcp-agent'
+          echo "$BASH_TEXT" | grep -q 'mcp-workspace'
+          echo "Normal bash call auto-routed to the Agent OS user."
+
+          GIT_CALL=$(jq -cn '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:"public-shared"}}}')
+          GIT_RESULT=$(mcp_call "$GIT_CALL")
+          jq -e '.result.isError != true and .error == null' <<<"$GIT_RESULT" >/dev/null
+          GIT_TEXT=$(echo "$GIT_RESULT" | jq -r '.result.content[]?.text // empty')
+          echo "$GIT_TEXT" | grep -q 'issue23-shared-workspace.txt'
+          echo "git_execute auto-routed to the isolated Git runner and saw the Agent-created shared file."
+
+          GIT_BASH=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"id",runner_id:$g}}}')
+          GIT_BASH_RESULT=$(mcp_call "$GIT_BASH")
+          jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH_RESULT" >/dev/null
+          echo "Explicit Git runner rejects Bash as expected."
+
+          SELECT_GIT=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$g}}}')
+          mcp_call "$SELECT_GIT" | jq -e '.result.isError != true and .error == null' >/dev/null
+          BASH_AGAIN=$(mcp_call "$BASH_CALL")
+          echo "$BASH_AGAIN" | jq -r '.result.content[]?.text // empty' | grep -q 'mcp-agent'
+          GIT_AGAIN=$(mcp_call "$GIT_CALL")
+          jq -e '.result.isError != true and .error == null' <<<"$GIT_AGAIN" >/dev/null
+          echo "Tool-role routing overrides an incompatible session pin while preserving the paired roles."
+
+          if grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$TOOLS$BASH_RESULT$GIT_RESULT$GIT_BASH_RESULT$BASH_AGAIN$GIT_AGAIN"; then
+            echo "::error::Credential-like value found in MCP response"
+            exit 1
+          fi
+          echo "Issue 23 Hub Git pair E2E: PASS"

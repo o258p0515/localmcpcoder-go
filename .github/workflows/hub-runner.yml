@@ -1,4 +1,5 @@
 name: LocalMCP Hub Runner
+run-name: Hub runner ${{ inputs.runner_os }} / ${{ inputs.runner_name }}
 on:
   workflow_dispatch:
     inputs:
@@ -11,21 +12,32 @@ on:
         description: "Comma-separated tags (for example linux,go,sandbox)"
         type: string
         required: false
-        default: "linux,go,gha"
+        default: "go,gha"
       duration_seconds:
         description: "Runner lifetime in seconds (maximum 20400 / 5h40m)"
         type: number
         required: true
         default: 20400
+      runner_os:
+        description: "Hosted runner operating system"
+        type: choice
+        options: [linux, windows]
+        required: true
+        default: linux
+      account_alias:
+        description: "Selected RTDB account alias for runner tags"
+        type: string
+        required: false
+        default: github
 permissions:
   contents: read
 concurrency:
-  # Same runner name replaces its prior instance; different names remain parallel.
-  group: localmcp-hub-runner-${{ inputs.runner_name || github.run_id }}
-  cancel-in-progress: true
+  # Every workflow run owns an independent runner; never cancel another instance.
+  group: localmcp-hub-runner-${{ github.run_id }}
+  cancel-in-progress: false
 jobs:
   runner:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
@@ -53,16 +65,25 @@ jobs:
           fi
       - name: Build and test Go runner
         working-directory: go
+        shell: bash
+        env:
+          RUNNER_OS: ${{ inputs.runner_os }}
         run: |
           set -euo pipefail
           go test ./...
-          go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp
-      - name: Start outbound Hub runner
+          if [ "$RUNNER_OS" = "windows" ]; then
+            go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp.exe" ./cmd/mcp
+          else
+            go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp
+          fi
+      - name: Start outbound Hub runner (Linux)
+        if: inputs.runner_os == 'linux'
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name }}
           LOCALMCP_RUNNER_TAGS: ${{ inputs.runner_tags }}
+          ACCOUNT_ALIAS: ${{ inputs.account_alias }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         shell: bash
@@ -70,18 +91,39 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/mcp-root"
           mkdir -p "$ROOT"
-          LOCALMCP_RUNNER_ID="${LOCALMCP_RUNNER_NAME:-gha}-${GITHUB_RUN_ID}"
+          LOCALMCP_RUNNER_ID="gh-linux-${GITHUB_RUN_ID}"
+          TAGS="provider:github,os:linux,account:${ACCOUNT_ALIAS},run:${GITHUB_RUN_ID},name:${LOCALMCP_RUNNER_NAME},${LOCALMCP_RUNNER_TAGS}"
           echo "::add-mask::$HUB_URLS"
           echo "Starting runner $LOCALMCP_RUNNER_ID for $DURATION_SECONDS seconds; Hub endpoint is masked."
           set +e
           timeout --signal=TERM --kill-after=40s "${DURATION_SECONDS}s" \
             "$RUNNER_TEMP/localmcpcoder-mcp" --root "$ROOT" --tunnel hub \
-            --hub-urls "$HUB_URLS" \
-            --runner-id "$LOCALMCP_RUNNER_ID" --runner-tags "$LOCALMCP_RUNNER_TAGS"
+            --hub-urls "$HUB_URLS" --runner-id "$LOCALMCP_RUNNER_ID" --runner-tags "$TAGS"
           STATUS=$?
           set -e
-          if [ "$STATUS" -eq 124 ] || [ "$STATUS" -eq 143 ]; then
-            echo "Planned runner lifetime ended; SIGTERM graceful drain was requested."
-            exit 0
-          fi
+          if [ "$STATUS" -eq 124 ] || [ "$STATUS" -eq 143 ]; then exit 0; fi
           exit "$STATUS"
+      - name: Start outbound Hub runner (Windows)
+        if: inputs.runner_os == 'windows'
+        env:
+          HUB_URLS: ${{ secrets.HUB_URLS }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name }}
+          LOCALMCP_RUNNER_TAGS: ${{ inputs.runner_tags }}
+          ACCOUNT_ALIAS: ${{ inputs.account_alias }}
+          DURATION_SECONDS: ${{ inputs.duration_seconds }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'mcp-root'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $runnerId = "gh-win-$env:GITHUB_RUN_ID"
+          $tags = "provider:github,os:windows,account:$env:ACCOUNT_ALIAS,run:$env:GITHUB_RUN_ID,name:$env:LOCALMCP_RUNNER_NAME,$env:LOCALMCP_RUNNER_TAGS"
+          $p = Start-Process -FilePath (Join-Path $env:RUNNER_TEMP 'localmcpcoder-mcp.exe') -ArgumentList @('--root', $root, '--tunnel', 'hub', '--hub-urls', $env:HUB_URLS, '--runner-id', $runnerId, '--runner-tags', $tags) -PassThru -NoNewWindow
+          $deadline = (Get-Date).AddSeconds([int]$env:DURATION_SECONDS)
+          while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2; $p.Refresh() }
+          if (-not $p.HasExited) {
+            try { Invoke-RestMethod -Uri 'http://127.0.0.1:8787/internal/shutdown' -Method Post -Headers @{ Authorization = "Bearer $env:MCP_TOKEN" } | Out-Null } catch { Write-Warning 'Graceful runner shutdown request failed.' }
+            if (-not $p.WaitForExit(35000)) { Stop-Process -Id $p.Id -Force; throw 'Runner did not drain before shutdown deadline.' }
+          }
+          if ($p.ExitCode -ne 0) { throw "Runner exited with code $($p.ExitCode)" }

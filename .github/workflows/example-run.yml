@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       runner_name:
-        description: "Unique Hub runner name; reusing a name replaces its previous workflow"
+        description: "Display name for an independent Hub runner instance"
         type: string
         required: false
         default: "public-mcp"
@@ -17,6 +17,17 @@ on:
         type: number
         required: false
         default: 20400
+      runner_os:
+        description: "Hosted runner operating system"
+        type: choice
+        options: [linux, windows]
+        required: false
+        default: linux
+      account_alias:
+        description: "Account alias used in runner tags"
+        type: string
+        required: false
+        default: github
   schedule:
     - cron: '0 */5 * * *'
 
@@ -34,12 +45,15 @@ jobs:
           DISPATCH_RUNNER_NAME: ${{ inputs.runner_name }}
           RUNNER_TAGS: ${{ inputs.runner_tags }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
+          RUNNER_OS: ${{ inputs.runner_os }}
         shell: bash
         run: |
           set -euo pipefail
           DISPATCH_RUNNER_NAME="${DISPATCH_RUNNER_NAME:-public-mcp}"
           RUNNER_TAGS="${RUNNER_TAGS:-linux,go,gha,public}"
           DURATION_SECONDS="${DURATION_SECONDS:-20400}"
+          RUNNER_OS="${RUNNER_OS:-linux}"
+          if [ "$RUNNER_OS" != "linux" ] && [ "$RUNNER_OS" != "windows" ]; then echo "::error title=Invalid OS::runner_os must be linux or windows"; exit 1; fi
           if [ -z "$DISPATCH_RUNNER_NAME" ] || [ "${#DISPATCH_RUNNER_NAME}" -gt 64 ] || [[ "$DISPATCH_RUNNER_NAME" == *$'\\n'* || "$DISPATCH_RUNNER_NAME" == *$'\\r'* ]]; then
             echo "::error title=Invalid runner name::Runner name must be 1-64 characters and contain no line breaks."
             exit 1
@@ -67,16 +81,22 @@ jobs:
           DISPATCH_RUNNER_NAME: ${{ inputs.runner_name }}
           RUNNER_TAGS: ${{ inputs.runner_tags }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
+          RUNNER_OS: ${{ inputs.runner_os }}
+          ACCOUNT_ALIAS: ${{ inputs.account_alias }}
         shell: bash
         run: |
           set -euo pipefail
           DISPATCH_RUNNER_NAME="${DISPATCH_RUNNER_NAME:-public-mcp}"
-          RUNNER_TAGS="${RUNNER_TAGS:-linux,go,gha,public}"
+          RUNNER_TAGS="${RUNNER_TAGS:-go,gha,public}"
           DURATION_SECONDS="${DURATION_SECONDS:-20400}"
+          RUNNER_OS="${RUNNER_OS:-linux}"
+          ACCOUNT_ALIAS="${ACCOUNT_ALIAS:-github}"
           echo "Dispatching Hub runner '$DISPATCH_RUNNER_NAME'; no Cloudflare Tunnel or DNS operations are performed."
           gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/hub-runner.yml/dispatches" \
             -f ref=main \
             -f "inputs[runner_name]=$DISPATCH_RUNNER_NAME" \
             -f "inputs[runner_tags]=$RUNNER_TAGS" \
-            -f "inputs[duration_seconds]=$DURATION_SECONDS"
+            -f "inputs[duration_seconds]=$DURATION_SECONDS" \
+            -f "inputs[runner_os]=$RUNNER_OS" \
+            -f "inputs[account_alias]=$ACCOUNT_ALIAS"
           echo "Hub runner workflow dispatched successfully."

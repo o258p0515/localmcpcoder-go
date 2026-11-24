@@ -129,6 +129,16 @@ describe("RegistryDO", () => {
       redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"]
     });
   });
+  it("resolves runner list and selected session in one combined action", async () => {
+    const { registry } = makeRegistry();
+    await action(registry, { action: "register", runner_id: "r1", os: "linux", arch: "amd64" });
+    await action(registry, { action: "setSessionRunner", session_key: "s1", runner_id: "r1" });
+    const response = await action(registry, { action: "resolveContext", session_key: "s1" });
+    expect((await response.json() as any).result).toMatchObject({
+      runners: [{ runner_id: "r1", status: "online" }],
+      selected_runner: "r1"
+    });
+  });
   it("lists runners in most-recently-connected order", async () => {
     const { registry } = makeRegistry();
     const clock = vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(200);
@@ -139,3 +149,4 @@ describe("RegistryDO", () => {
     clock.mockRestore();
   });
 });
+  152

@@ -94,11 +94,11 @@ jobs:
           set +e
           sudo -H -g mcp-workspace --preserve-env=MCP_TOKEN,HUB_URLS -u mcp-agent bash -c 'umask 0007; exec "$@"' _ timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
             "$BIN" --root "$ROOT" --port 8787 --tunnel hub \
-            --hub-urls "$HUB_URLS" --runner-id "$AGENT_ID" --runner-tags "linux,agent,issue23" &
+            --hub-urls "$HUB_URLS" --runner-id "$AGENT_ID" --runner-tags "linux,agent,issue23,pair:${RUNNER_NAME_PREFIX}" &
           AGENT_PID=$!
           sudo -H -g mcp-workspace --preserve-env=MCP_TOKEN,HUB_URLS,GIT_CREDENTIAL_URL,GIT_EXECUTOR_TOKEN -u mcp-git bash -c 'umask 0007; exec "$@"' _ timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
             "$BIN" --root "$ROOT" --port 8788 --tunnel hub \
-            --hub-urls "$HUB_URLS" --runner-id "$GIT_ID" --runner-tags "linux,git,isolated" \
+            --hub-urls "$HUB_URLS" --runner-id "$GIT_ID" --runner-tags "linux,git,isolated,pair:${RUNNER_NAME_PREFIX}" \
             --tool-profile git-executor &
           GIT_PID=$!
           wait -n "$AGENT_PID" "$GIT_PID"; FIRST_STATUS=$?

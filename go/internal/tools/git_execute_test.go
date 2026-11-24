@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/o258p0515/localmcpcoder-go/go/internal/config"
@@ -171,5 +172,13 @@ func TestGitExecuteRejectsGitMetadataInSharedWorkspace(t *testing.T) {
 	res := r.Call(context.Background(), "git_execute", map[string]any{"operation": "status", "account": "personal", "path": "repo"})
 	if !res.IsError {
 		t.Fatal("accepted Agent-controlled .git metadata")
+	}
+}
+
+func TestGitOutputRedactsCredentialOnErrorAndSuccess(t *testing.T) {
+	secret := "github_pat_sensitive_example"
+	got := redactCredential("fatal: remote rejected token="+secret, secret)
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("credential not redacted: %s", got)
 	}
 }

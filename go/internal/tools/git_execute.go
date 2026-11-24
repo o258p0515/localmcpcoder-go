@@ -97,6 +97,11 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	if op != "clone" && !validPrivateGitDir(gitDir) {
 		return fail("no private Git metadata exists for this workspace; clone the repository first")
 	}
+	if op == "fetch" || op == "pull" || op == "push" {
+		if !validGitHubRemote(gitDir, repoPath, op == "push") {
+			return fail("origin and push URL must be GitHub HTTPS repository URLs")
+		}
+	}
 
 	ref := strings.TrimSpace(val(a, "ref"))
 	if ref != "" && !validBranchRef(ref) {
@@ -162,9 +167,6 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 				args = append(args, ref)
 			}
 		case "push":
-			if !validGitHubRemote(gitDir, repoPath, true) {
-				return fail("origin and push URL must be GitHub HTTPS repository URLs")
-			}
 			if dryRun {
 				args = append(args, "push", "--dry-run", "origin")
 			} else {
@@ -186,9 +188,6 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		case "commit":
 			args = append(args, "add", "-A", "--", ".")
 		}
-		if (op == "fetch" || op == "pull") && !validGitHubRemote(gitDir, repoPath, false) {
-			return fail("origin must be a GitHub HTTPS repository URL")
-		}
 	}
 
 	cmd := exec.CommandContext(cctx, "git", args...)
@@ -203,6 +202,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	}
 	cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 	output, runErr := runGitCommand(cmd, r.D.MaxOutput)
+	output = redactCredential(output, credential.Credential)
 	if cctx.Err() == context.DeadlineExceeded {
 		return fail("Git operation timed out")
 	}
@@ -236,9 +236,6 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		if commitErr != nil {
 			return gitCommandFailure(commitErr, output)
 		}
-	}
-	if credential.Credential != "" {
-		output = strings.ReplaceAll(output, credential.Credential, "[REDACTED]")
 	}
 	if output == "" {
 		output = "Git " + op + " completed successfully"
@@ -302,6 +299,13 @@ func runGitCommand(cmd *exec.Cmd, maxOutput int) (string, error) {
 		output += "[stderr]\n" + value
 	}
 	return output, err
+}
+
+func redactCredential(output, credential string) string {
+	if credential == "" {
+		return output
+	}
+	return strings.ReplaceAll(output, credential, "[REDACTED]")
 }
 
 func gitCommandFailure(err error, output string) Result {

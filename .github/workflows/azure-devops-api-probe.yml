@@ -138,14 +138,12 @@ jobs:
                 _,refs=api("PIPELINE-branch-source","GET",f"/{pname}/_apis/git/repositories/{rid}/refs?filter=heads/main")
                 ref_items=refs.get("value",[]) if isinstance(refs,dict) else []
                 main_ref=next((x for x in ref_items if x.get("name")=="refs/heads/main"),None)
-                if not main_ref:
-                  print(json.dumps({"probe":"PIPELINE-BOOTSTRAP","result":"BLOCKED_MAIN_REF_NOT_FOUND"}))
-                else:
-                  zero="0000000000000000000000000000000000000000"
-                  push={"refUpdates":[{"name":branch,"oldObjectId":zero}],"commits":[{"comment":"Temporary Issue 69 Azure pipeline probe","parents":[main_ref["objectId"]],"changes":[{"changeType":"add","item":{"path":file_path},"newContent":{"content":yaml_text,"contentType":"rawtext"}}]}]}
-                  code,push_result=api("PIPELINE-create-probe-branch","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",push)
-                  branch_created=200<=code<300
-                  if branch_created:
+              zero="0000000000000000000000000000000000000000"
+              parents=[main_ref["objectId"]] if main_ref else []
+              push={"refUpdates":[{"name":branch,"oldObjectId":zero}],"commits":[{"comment":"Temporary Issue 69 Azure pipeline probe","parents":parents,"changes":[{"changeType":"add","item":{"path":file_path},"newContent":{"content":yaml_text,"contentType":"rawtext"}}]}]}
+              code,push_result=api("PIPELINE-create-probe-branch","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",push)
+              branch_created=200<=code<300
+              if branch_created:
                     cfg={"name":"LocalMCP-Issue69-Probe-"+run_tag,"folder":"\\LocalMCP-Issue69-Probe","configuration":{"type":"yaml","path":file_path,"repository":{"id":rid,"name":repo["name"],"type":"azureReposGit"}}}
                     code,pipe=api("PIPELINE-create-definition","POST",f"/{pname}/_apis/pipelines",cfg)
                     if 200<=code<300 and isinstance(pipe,dict) and pipe.get("id"):

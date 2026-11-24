@@ -4,7 +4,9 @@ import type { Env } from "../src/types";
 
 class FakeSQL {
   rows = new Map<string, any>();
+  queries: string[] = [];
   exec(query: string, ...args: any[]) {
+    this.queries.push(query);
     if (query.startsWith("INSERT OR REPLACE INTO async_jobs")) {
       const [job_id, tool_name, created_at] = args;
       this.rows.set(job_id, { job_id, tool_name, status: "running", result_json: null, created_at, finished_at: null });
@@ -85,6 +87,24 @@ describe("RunnerDO disconnect handling", () => {
     expect(await response.json()).toMatchObject({ error: "runner websocket disconnected before the request completed" });
   });
 
+  it("does not clean up or query SQLite for a normal synchronous response", async () => {
+    const { runner, socket, sql } = makeRunner();
+    const responsePromise = runner.fetch(new Request("https://runner/dispatch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: { jsonrpc: "2.0", id: "rpc-sync", method: "tools/call" }, tool_name: "bash" })
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const requestFrame = JSON.parse((socket.send as any).mock.calls[0][0]);
+    await runner.webSocketMessage(socket as any, JSON.stringify({
+      type: "rpc_response", req_id: requestFrame.req_id,
+      payload: { jsonrpc: "2.0", id: "rpc-sync", result: { content: [{ type: "text", text: "ok" }] } }
+    }));
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(sql.queries.some((query) => query.startsWith("DELETE FROM async_jobs"))).toBe(false);
+    expect(sql.queries.some((query) => query.startsWith("SELECT job_id FROM async_jobs"))).toBe(false);
+  });
+
   it("marks an async job failed when its runner disconnects", async () => {
     const { runner, socket, sql } = makeRunner();
     const response = await runner.fetch(new Request("https://runner/dispatch", {
@@ -129,3 +149,4 @@ describe("RunnerDO disconnect handling", () => {
     expect(registryCalls.some((call) => call.action === "unregister")).toBe(false);
   });
 });
+  152

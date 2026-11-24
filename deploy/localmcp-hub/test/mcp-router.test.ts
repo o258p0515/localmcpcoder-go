@@ -6,12 +6,15 @@ function fakeEnv(options: { runners?: any[]; failRunnerIds?: string[]; toolsByRu
   const runners = options.runners ?? [{ runner_id: "r1", os: "linux", arch: "amd64", repo: "owner/repo", tags: ["go"], status: "online", connected_at: 1 }];
   const sessions = new Map<string, string>();
   const runnerCalls: any[] = [];
+  const registryCalls: any[] = [];
   const registryStub = {
     async fetch(_input: any, init?: RequestInit) {
       const body = JSON.parse(String(init?.body ?? "{}"));
+      registryCalls.push(body.action);
       let result: any;
       switch (body.action) {
         case "listRunners": result = runners; break;
+        case "resolveContext": result = { runners, selected_runner: sessions.get(body.session_key) ?? null }; break;
         case "getSessionRunner": result = sessions.get(body.session_key) ?? null; break;
         case "setSessionRunner":
           if (!runners.some((r) => r.runner_id === body.runner_id && r.status === "online")) return Response.json({ error: "runner is not online" }, { status: 500 });
@@ -40,7 +43,7 @@ function fakeEnv(options: { runners?: any[]; failRunnerIds?: string[]; toolsByRu
     REGISTRY_DO: { idFromName: () => "global", get: () => registryStub },
     RUNNER_DO: { idFromName: (id: string) => id, get: (id: string) => Object.assign(Object.create(runnerStub), { runnerId: id }) }
   } as unknown as Env;
-  return { env, sessions, runnerCalls, runners };
+  return { env, sessions, runnerCalls, registryCalls, runners };
 }
 function request(rpc: any, session = "session-1", headers: Record<string, string> = {}) {
   return new Request("https://hub.example.com/mcp", {
@@ -97,6 +100,8 @@ describe("MCP Hub routing", () => {
       }
     });
     const tools = await listed(env);
+    const secondTools = await listed(env);
+    expect(secondTools.map((tool) => tool.name)).toContain("custom_two");
     expect(tools.map((tool) => tool.name)).toContain("custom_one");
     expect(tools.map((tool) => tool.name)).toContain("custom_two");
     expect(tools.filter((tool) => tool.name === "list_runners")).toHaveLength(1);
@@ -122,6 +127,16 @@ describe("MCP Hub routing", () => {
     expect(text).toContain("event: message\ndata: ");
     expect(text.endsWith("\n\n")).toBe(true);
     expect(text).not.toContain("\\ndata:");
+  });
+
+
+  it("uses one combined RegistryDO request for list_runners and each routed tool call", async () => {
+    const { env, registryCalls } = fakeEnv();
+    await handleMcp(request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_runners", arguments: {} } }), env, "session-1");
+    expect(registryCalls).toEqual(["resolveContext"]);
+    registryCalls.length = 0;
+    await handleMcp(request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "bash", arguments: { command: "pwd" } } }), env, "session-1");
+    expect(registryCalls).toEqual(["resolveContext"]);
   });
 
   it("pins a session and injects runner routing arguments into remote tool schemas", async () => {
@@ -222,3 +237,4 @@ describe("MCP Hub routing", () => {
     expect(runnerCalls[0].body.payload.params.arguments).toEqual({ command: "pwd" });
   });
 });
+  240

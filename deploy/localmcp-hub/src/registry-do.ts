@@ -22,6 +22,7 @@ export class RegistryDO {
         case "unregister": result = this.unregister(String(body.runner_id ?? "")); break;
         case "setStatus": result = this.setStatus(String(body.runner_id ?? ""), String(body.status ?? "")); break;
         case "listRunners": result = this.listRunners(); break;
+        case "resolveContext": result = this.resolveContext(String(body.session_key ?? "")); break;
         case "getRunner": result = this.getRunner(String(body.runner_id ?? "")); break;
         case "getSessionRunner": result = this.getSessionRunner(String(body.session_key ?? "")); break;
         case "setSessionRunner": result = this.setSessionRunner(String(body.session_key ?? ""), String(body.runner_id ?? "")); break;
@@ -56,6 +57,11 @@ export class RegistryDO {
   }
   private listRunners(): RunnerInfo[] {
     return this.state.storage.sql.exec<any>("SELECT * FROM runners ORDER BY connected_at DESC").toArray().map((row) => this.rowToRunner(row));
+  }
+  private resolveContext(key: string): { runners: RunnerInfo[]; selected_runner: string | null } {
+    // One RegistryDO request returns both values needed for routing. Keep the
+    // two SQL reads inside the same DO invocation to halve inter-DO requests.
+    return { runners: this.listRunners(), selected_runner: this.getSessionRunner(key) };
   }
   private getRunner(id: string): RunnerInfo | null {
     const row = this.state.storage.sql.exec<any>("SELECT * FROM runners WHERE runner_id=?", id).toArray()[0];
@@ -135,3 +141,4 @@ export class RegistryDO {
       status: row.status === "draining" ? "draining" : "online", connected_at: Number(row.connected_at) };
   }
 }
+  144

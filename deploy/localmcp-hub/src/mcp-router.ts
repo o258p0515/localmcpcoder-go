@@ -4,6 +4,42 @@ import { runnerToolCatalog } from "./tool-catalog";
 
 const json = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
 const error = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
+const RUNNER_LIST_CACHE_TTL_MS = 10_000;
+const RUNNER_TOOLS_CACHE_TTL_MS = 60_000;
+type RouterCache = {
+  runnerList?: { expiresAt: number; runners: RunnerInfo[] };
+  runnerTools: Map<string, { expiresAt: number; tools: any[] }>;
+};
+const routerCaches = new WeakMap<object, RouterCache>();
+
+function cacheFor(env: Env): RouterCache {
+  const key = env.REGISTRY_DO as object;
+  let cache = routerCaches.get(key);
+  if (!cache) {
+    cache = { runnerTools: new Map() };
+    routerCaches.set(key, cache);
+  }
+  return cache;
+}
+
+function cacheRunnerList(env: Env, runners: RunnerInfo[]): void {
+  cacheFor(env).runnerList = { runners, expiresAt: Date.now() + RUNNER_LIST_CACHE_TTL_MS };
+}
+
+function invalidateRunnerCaches(env: Env): void {
+  const cache = cacheFor(env);
+  cache.runnerList = undefined;
+  cache.runnerTools.clear();
+}
+
+async function getCachedRunnerList(env: Env): Promise<RunnerInfo[]> {
+  const cache = cacheFor(env);
+  if (cache.runnerList && cache.runnerList.expiresAt > Date.now()) return cache.runnerList.runners;
+  const runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
+  cacheRunnerList(env, runners);
+  return runners;
+}
+
 const textResult = (value: unknown, isError = false) => ({
   content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
   ...(isError ? { isError: true } : {})
@@ -60,7 +96,7 @@ async function listRunnerTools(env: Env): Promise<any[]> {
   const metaNames = new Set(metaTools().map((tool) => tool.name));
   let runners: RunnerInfo[] = [];
   try {
-    runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
+    runners = await getCachedRunnerList(env);
   } catch {
     return baseline;
   }
@@ -68,6 +104,9 @@ async function listRunnerTools(env: Env): Promise<any[]> {
   if (online.length === 0) return baseline;
 
   const catalogs = await Promise.all(online.map(async (runner) => {
+    const toolsCache = cacheFor(env).runnerTools;
+    const cached = toolsCache.get(runner.runner_id);
+    if (cached && cached.expiresAt > Date.now()) return cached.tools;
     try {
       // A stalled runner must not prevent the Hub's static catalog from being
       // returned. The underlying request may finish later, but its result is
@@ -79,9 +118,11 @@ async function listRunnerTools(env: Env): Promise<any[]> {
         }),
         5_000
       );
-      return payload?.result?.tools ?? [];
+      const tools = payload?.result?.tools ?? [];
+      toolsCache.set(runner.runner_id, { tools, expiresAt: Date.now() + RUNNER_TOOLS_CACHE_TTL_MS });
+      return tools;
     } catch {
-      return [];
+      return cached?.tools ?? [];
     }
   }));
 
@@ -98,7 +139,8 @@ async function listRunnerTools(env: Env): Promise<any[]> {
 }
 
 async function resolveRunner(env: Env, session: string, headerId: string, argumentId?: string, toolName = ""): Promise<{ runner?: RunnerInfo; runners: RunnerInfo[]; error?: string }> {
-  const runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
+  const context = await registry(env, { action: "resolveContext", session_key: session }) as { runners: RunnerInfo[]; selected_runner: string | null };
+  const runners = context.runners;
   const online = runners.filter((r) => r.status === "online");
   const explicit = argumentId || headerId;
   if (explicit) {
@@ -107,8 +149,7 @@ async function resolveRunner(env: Env, session: string, headerId: string, argume
     return { runner, runners };
   }
 
-  const selectedId = await registry(env, { action: "getSessionRunner", session_key: session });
-  const selected = online.find((r) => r.runner_id === selectedId);
+  const selected = online.find((r) => r.runner_id === context.selected_runner);
   const hasTag = (runner: RunnerInfo | undefined, tag: string) => !!runner?.tags?.includes(tag);
   const pairTag = (runner: RunnerInfo | undefined) => runner?.tags?.find((tag) => tag.startsWith("pair:"));
   const gitRunners = online.filter((runner) => hasTag(runner, "git") && hasTag(runner, "isolated"));
@@ -174,15 +215,17 @@ async function processRequest(request: Request, env: Env, session: string, rpc: 
   const args = (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>;
 
   if (name === "list_runners") {
-    const runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
-    const selected = await registry(env, { action: "getSessionRunner", session_key: session });
-    return json(id, textResult({ runners, selected_runner: selected }));
+    const context = await registry(env, { action: "resolveContext", session_key: session }) as { runners: RunnerInfo[]; selected_runner: string | null };
+    // Explicit list_runners is authoritative: bypass and refresh the isolate cache.
+    cacheRunnerList(env, context.runners);
+    return json(id, textResult(context));
   }
   if (name === "select_runner") {
     const runnerId = String(args.runner_id ?? "");
     if (!runnerId) return json(id, textResult("runner_id is required", true));
     try {
       const selected = await registry(env, { action: "setSessionRunner", session_key: session, runner_id: runnerId });
+      invalidateRunnerCaches(env);
       return json(id, textResult(selected));
     } catch (e) { return json(id, textResult(e instanceof Error ? e.message : String(e), true)); }
   }
@@ -242,3 +285,4 @@ export async function handleMcp(request: Request, env: Env, session: string): Pr
   try { return Response.json(await result, { headers }); }
   catch (e) { return Response.json(error(rpc.id, -32603, e instanceof Error ? e.message : String(e)), { headers }); }
 }
+  288

@@ -91,7 +91,6 @@ export class RunnerDO {
     const wantsAsync = body.async === true;
     const socket = sockets[0];
 
-    this.cleanupJobs();
     const pendingResult = new Promise<any>((resolve) => {
       const entry: Pending = { resolve, jobCreated: wantsAsync, socket };
       this.pending.set(reqId, entry);
@@ -169,7 +168,10 @@ export class RunnerDO {
 
     const reqId = String(frame.req_id);
     const payload = frame.payload ?? {};
-    const row = this.ctx.storage.sql.exec<any>(
+    const entry = this.pending.get(reqId);
+    // A normal synchronous response cannot have an async_jobs row. Avoid a
+    // SQLite read on this hot path; retain the lookup for async/orphaned jobs.
+    const row = entry && !entry.jobCreated ? undefined : this.ctx.storage.sql.exec<any>(
       "SELECT job_id FROM async_jobs WHERE job_id=?",
       reqId
     ).toArray()[0];
@@ -183,7 +185,6 @@ export class RunnerDO {
       );
     }
 
-    const entry = this.pending.get(reqId);
     if (!entry || entry.socket !== ws) return;
     if (entry.timer) clearTimeout(entry.timer);
     if (!entry.jobCreated) entry.resolve(payload);
@@ -225,6 +226,9 @@ export class RunnerDO {
   }
 
   private createJob(id: string, tool: string): void {
+    // Retention cleanup is needed only when persisting an async job, never on
+    // every ordinary synchronous dispatch.
+    this.cleanupJobs();
     this.ctx.storage.sql.exec(
       "INSERT OR REPLACE INTO async_jobs(job_id,tool_name,status,result_json,created_at,finished_at) VALUES(?,?,'running',NULL,?,NULL)",
       id,
@@ -275,3 +279,4 @@ export class RunnerDO {
 function idFromAttachment(ws: WebSocket): string {
   return String((ws as any).deserializeAttachment?.()?.runner_id ?? "");
 }
+  282

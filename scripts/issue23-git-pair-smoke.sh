@@ -83,7 +83,9 @@ if ! jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev
   exit 1
 fi
 checkpoint "agent-write-shared-workspace"
-AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "cd public-shared && printf 'shared-workspace-check\\\\n' > issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
+AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "cd public-shared && printf 'shared-workspace-check\\\\n' > issue23-shared-workspace.txt && pwd && ls -la" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
+echo "Agent write diagnostics:" >&2
+jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$AGENT_WRITE" >&2
 if ! jq -e '.result.isError != true and .error == null' <<<"$AGENT_WRITE" >/dev/null; then
   echo "Agent shared-workspace write failed; sanitized MCP error follows:" >&2
   jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$AGENT_WRITE" >&2

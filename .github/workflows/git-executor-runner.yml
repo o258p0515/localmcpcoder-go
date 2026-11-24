@@ -60,7 +60,7 @@ jobs:
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
           GIT_CREDENTIAL_URL: https://github-mcp-proxy.o258p0515.dpdns.org/internal/runner/git-credential
-        run: ./scripts/issue23-git-pair-smoke.sh
+        run: bash ./scripts/issue23-git-pair-smoke.sh
       - name: Start paired Agent and Git-only Hub runners
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}

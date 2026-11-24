@@ -84,7 +84,7 @@ jobs:
           echo "$BASH_TEXT" | grep -q 'mcp-workspace'
           echo "Normal bash call auto-routed to the Agent OS user."
 
-          GIT_CALL=$(jq -cn '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:"public-shared"}}}')
+          GIT_CALL=$(jq -cn --arg path "$SHARED_PATH" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:$path}}}')
           GIT_RESULT=$(mcp_call "$GIT_CALL")
           jq -e '.result.isError != true and .error == null' <<<"$GIT_RESULT" >/dev/null
           GIT_TEXT=$(echo "$GIT_RESULT" | jq -r '.result.content[]?.text // empty')

@@ -110,22 +110,43 @@ async function resolveRunner(env: Env, session: string, headerId: string, argume
   const selectedId = await registry(env, { action: "getSessionRunner", session_key: session });
   const selected = online.find((r) => r.runner_id === selectedId);
   const hasTag = (runner: RunnerInfo | undefined, tag: string) => !!runner?.tags?.includes(tag);
+  const pairTag = (runner: RunnerInfo | undefined) => runner?.tags?.find((tag) => tag.startsWith("pair:"));
   const gitRunners = online.filter((runner) => hasTag(runner, "git") && hasTag(runner, "isolated"));
   const agentRunners = online.filter((runner) => hasTag(runner, "agent"));
+  const paired = (source: RunnerInfo, candidates: RunnerInfo[]) => {
+    const key = pairTag(source);
+    if (!key) return candidates.length === 1 ? candidates[0] : undefined;
+    const matches = candidates.filter((candidate) => pairTag(candidate) === key);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
 
-  // Keep the Agent and Git-only processes paired behind one Hub endpoint.
-  // An explicit runner_id always wins; otherwise choose a runner by tool role,
-  // even when the session's default runner is the other half of the pair.
+  // Each Agent/Git pair shares a stable pair:<id> tag. A session pinned to
+  // either half routes the opposite tool role to that exact peer. Legacy
+  // unpaired deployments remain supported only while the opposite role is unique.
   if (toolName === "git_execute") {
     if (hasTag(selected, "git") && hasTag(selected, "isolated")) return { runner: selected, runners };
+    if (hasTag(selected, "agent")) {
+      const peer = paired(selected!, gitRunners);
+      if (peer) return { runner: peer, runners };
+      return { runners, error: pairTag(selected)
+        ? "The isolated Git runner paired with this Agent is not online or the pair tag is ambiguous."
+        : "Multiple isolated Git runners are online. Pair tags are required or pass runner_id." };
+    }
     if (gitRunners.length === 1) return { runner: gitRunners[0], runners };
-    if (gitRunners.length > 1) return { runners, error: "Multiple isolated Git runners are online. Pass runner_id to select one." };
+    if (gitRunners.length > 1) return { runners, error: "Multiple isolated Git runners are online. Select an Agent runner with a matching pair tag or pass runner_id." };
     return { runners, error: "No online isolated Git executor runner. Start a runner tagged git,isolated, then call list_runners." };
   }
 
   if (hasTag(selected, "agent")) return { runner: selected, runners };
+  if (hasTag(selected, "git") && hasTag(selected, "isolated")) {
+    const peer = paired(selected!, agentRunners);
+    if (peer) return { runner: peer, runners };
+    return { runners, error: pairTag(selected)
+      ? "The Agent runner paired with this Git executor is not online or the pair tag is ambiguous."
+      : "Multiple Agent runners are online. Pair tags are required or pass runner_id." };
+  }
   if (agentRunners.length === 1) return { runner: agentRunners[0], runners };
-  if (agentRunners.length > 1) return { runners, error: "Multiple Agent runners are online. Pass runner_id to select one." };
+  if (agentRunners.length > 1) return { runners, error: "Multiple Agent runners are online. Select a Git runner with a matching pair tag or pass runner_id." };
   if (selected && !hasTag(selected, "git")) return { runner: selected, runners };
   if (online.length === 1 && !hasTag(online[0], "git")) return { runner: online[0], runners };
   if (online.length === 0) return { runners, error: "No online runner. Start a LocalMCP Hub runner, then call list_runners." };

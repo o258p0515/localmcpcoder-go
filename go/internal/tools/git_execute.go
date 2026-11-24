@@ -108,6 +108,13 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	if op == "commit" && (message == "" || len(message) > 512 || strings.ContainsRune(message, '\x00')) {
 		return fail("commit requires a message of 1 to 512 characters")
 	}
+	var commitPathspecs []string
+	if op == "commit" {
+		commitPathspecs, err = gitCommitPathspecs(repoPath, a["paths"])
+		if err != nil {
+			return fail("invalid commit paths: " + err.Error())
+		}
+	}
 	dryRun, _ := a["dry_run"].(bool)
 
 	needsCredential := op == "clone" || op == "fetch" || op == "pull" || op == "push"
@@ -184,7 +191,8 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		case "log":
 			args = append(args, "log", "-10", "--oneline", "--decorate")
 		case "commit":
-			args = append(args, "add", "-A", "--", ".")
+			args = append(args, "add", "-A", "--")
+			args = append(args, commitPathspecs...)
 		}
 	}
 
@@ -414,6 +422,57 @@ func gitSafeEnv(in []string) []string {
 		}
 	}
 	return out
+}
+
+func gitCommitPathspecs(repoPath string, raw any) ([]string, error) {
+	if raw == nil {
+		return []string{":(literal)."}, nil
+	}
+	var values []string
+	switch paths := raw.(type) {
+	case []any:
+		for _, value := range paths {
+			path, ok := value.(string)
+			if !ok { return nil, errors.New("each path must be a string") }
+			values = append(values, path)
+		}
+	case []string:
+		values = append(values, paths...)
+	default:
+		return nil, errors.New("paths must be an array of relative paths")
+	}
+	if len(values) == 0 || len(values) > 100 {
+		return nil, errors.New("provide between 1 and 100 paths")
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || strings.ContainsRune(value, '\x00') || !filepath.IsLocal(value) {
+			return nil, errors.New("paths must be non-empty local relative paths")
+		}
+		clean := filepath.Clean(value)
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, errors.New("path escapes the repository")
+		}
+		current := repoPath
+		parts := strings.Split(clean, string(filepath.Separator))
+		for i, part := range parts {
+			current = filepath.Join(current, part)
+			info, err := os.Lstat(current)
+			if os.IsNotExist(err) { break } // deleted tracked paths are valid Git pathspecs
+			if err != nil { return nil, errors.New("cannot inspect path") }
+			if i < len(parts)-1 && info.Mode()&os.ModeSymlink != 0 {
+				return nil, errors.New("path traverses a symlinked directory")
+			}
+		}
+		pathspec := ":(literal)" + filepath.ToSlash(clean)
+		if _, exists := seen[pathspec]; !exists {
+			seen[pathspec] = struct{}{}
+			result = append(result, pathspec)
+		}
+	}
+	return result, nil
 }
 
 func withinRoot(root, path string) bool {

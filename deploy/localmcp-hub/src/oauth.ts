@@ -8,6 +8,7 @@ type OAuthClient = {
   client_secret?: string;
   client_secret_hash?: string;
   redirect_uris: string[];
+  is_static?: boolean;
 };
 
 const enc = (bytes: Uint8Array) => {
@@ -42,9 +43,34 @@ export function isValidRedirectUri(value: string): boolean {
     return true;
   } catch { return false; }
 }
+function matchesAllowedRedirect(allowed: string, candidate: string, candidateUrl: URL): boolean {
+  if (allowed === "*") return true;
+  if (allowed === candidate) return true;
+  if (allowed.endsWith("*") && candidate.startsWith(allowed.slice(0, -1))) return true;
+  try {
+    const allowedUrl = new URL(allowed);
+    if (allowedUrl.origin === candidateUrl.origin && allowedUrl.pathname.startsWith("/r/") && candidateUrl.pathname.startsWith("/r/")) {
+      return true;
+    }
+  } catch { /* ignore invalid allowlist entry */ }
+  return false;
+}
 function clientAllowsRedirect(client: OAuthClient, value: string): boolean {
   if (!isValidRedirectUri(value)) return false;
-  return client.redirect_uris.includes(value);
+  const candidateUrl = new URL(value);
+  if (client.redirect_uris.some((allowed) => matchesAllowedRedirect(allowed, value, candidateUrl))) {
+    return true;
+  }
+  // Static MCP clients registered in Gemini/Google apps receive per-app callback
+  // paths under https://oauth-redirect.googleusercontent.com/r/<app-id>.
+  if (
+    client.is_static &&
+    candidateUrl.origin === "https://oauth-redirect.googleusercontent.com" &&
+    candidateUrl.pathname.startsWith("/r/")
+  ) {
+    return true;
+  }
+  return false;
 }
 async function key(env: Env): Promise<CryptoKey> {
   if (!env.MCP_TOKEN) throw new Error("MCP_TOKEN is not configured");
@@ -100,7 +126,8 @@ async function resolveClient(env: Env, id: string): Promise<OAuthClient | null> 
       client_name: "Configured MCP client",
       token_endpoint_auth_method: env.MCP_OAUTH_CLIENT_SECRET ? "client_secret_basic" : "none",
       client_secret: env.MCP_OAUTH_CLIENT_SECRET,
-      redirect_uris: redirects(env)
+      redirect_uris: redirects(env),
+      is_static: true
     };
   }
   try {

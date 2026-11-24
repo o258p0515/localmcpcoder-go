@@ -118,6 +118,15 @@ describe("Hub OAuth", () => {
     expect(await verifyOAuthAccessToken(tokens.access_token, env.MCP_TOKEN)).toBe(true);
   });
 
+  it("allows per-app Google/Gemini custom MCP redirect URIs for the static client", async () => {
+    const redirect = "https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-13b675fb5285e81468d9a6ef";
+    const challenge = await pkcePair("c".repeat(64));
+    const response = await handleOAuthRequest(new Request(
+      `https://hub.example/authorize?response_type=code&client_id=connector-client&redirect_uri=${encodeURIComponent(redirect)}&code_challenge=${challenge}&code_challenge_method=S256&state=s3`
+    ), env);
+    expect(response.status).toBe(200);
+  });
+
   it("rejects redirect URIs outside the configured allowlist", async () => {
     const response = await handleOAuthRequest(new Request("https://hub.example/authorize?response_type=code&client_id=connector-client&redirect_uri=https%3A%2F%2Fevil.example%2Fcallback&code_challenge=x&code_challenge_method=S256"), env);
     expect(response.status).toBe(400);

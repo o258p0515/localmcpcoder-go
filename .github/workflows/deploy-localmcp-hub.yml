@@ -26,6 +26,11 @@ jobs:
       run:
         working-directory: deploy/localmcp-hub
     steps:
+      - name: Enforce main-only production deployment
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error title=Non-main production deploy blocked::Deploy LocalMCP Hub only deploys from refs/heads/main (current ref: ${{ github.ref }}). Open a PR, verify LocalMCP Hub CI passes, and merge into main so Git reconciles all changes."
+          exit 1
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
@@ -63,8 +68,7 @@ jobs:
         working-directory: go
         run: |
           set -euo pipefail
-          go mod tidy
-          go test ./...
+          go test -race ./...
           go vet ./...
           go build ./cmd/mcp
       - name: Resolve zone, prepare DNS and derive deployment secrets
@@ -97,6 +101,7 @@ jobs:
       - name: Smoke test Hub endpoints
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          MCP_OAUTH_CLIENT_ID: ${{ secrets.MCP_OAUTH_CLIENT_ID }}
         run: |
           set -euo pipefail
           for attempt in $(seq 1 20); do
@@ -113,6 +118,14 @@ jobs:
           echo "$OAUTH_META" | jq -e --arg endpoint "https://$HUB_DOMAIN/authorize" --arg token "https://$HUB_DOMAIN/token" --arg reg "https://$HUB_DOMAIN/register" '.authorization_endpoint == $endpoint and .token_endpoint == $token and .registration_endpoint == $reg' >/dev/null
           RESOURCE_META=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/.well-known/oauth-protected-resource")
           echo "$RESOURCE_META" | jq -e --arg resource "https://$HUB_DOMAIN/mcp" --arg issuer "https://$HUB_DOMAIN" '.resource == $resource and (.authorization_servers | index($issuer) != null)' >/dev/null
+          AUTH_STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' --get "https://$HUB_DOMAIN/authorize" \
+            --data-urlencode "response_type=code" \
+            --data-urlencode "client_id=$MCP_OAUTH_CLIENT_ID" \
+            --data-urlencode "redirect_uri=https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-smoke" \
+            --data-urlencode "code_challenge=8B9l90_8ShdZEpUBVtwp3Hu5i78e2yUU6fCcDrAe6Vw" \
+            --data-urlencode "code_challenge_method=S256" \
+            --data-urlencode "state=smoke")
+          test "$AUTH_STATUS" = "200"
           DCR=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/register" -H 'Content-Type: application/json' --data '{"client_name":"hub-smoke-dcr","redirect_uris":["https://example.com/callback"],"token_endpoint_auth_method":"none"}')
           echo "$DCR" | jq -e '.client_id | startswith("dcr_")' >/dev/null
           TOOLS=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')

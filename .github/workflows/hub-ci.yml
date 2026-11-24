@@ -1,0 +1,48 @@
+name: LocalMCP Hub CI
+on:
+  pull_request:
+    paths:
+      - 'deploy/localmcp-hub/**'
+      - 'go/**'
+      - '.github/workflows/hub-ci.yml'
+      - '.github/workflows/deploy-localmcp-hub.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: localmcp-hub-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: go/go.mod
+      - name: Install Hub Worker dependencies
+        working-directory: deploy/localmcp-hub
+        run: npm install --no-audit --no-fund
+      - name: Validate E2E script syntax
+        working-directory: deploy/localmcp-hub
+        run: node --check scripts/e2e-smoke.mjs
+      - name: Typecheck Hub Worker
+        working-directory: deploy/localmcp-hub
+        run: npm run typecheck
+      - name: Test Hub Worker
+        working-directory: deploy/localmcp-hub
+        run: npm test
+      - name: Test Go runner with race detector
+        working-directory: go
+        run: |
+          set -euo pipefail
+          go test -race ./...
+          go vet ./...
+          go build ./cmd/mcp

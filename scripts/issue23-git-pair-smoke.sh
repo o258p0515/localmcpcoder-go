@@ -82,11 +82,22 @@ if ! jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev
   jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$PUBLIC_CLONE" >&2
   exit 1
 fi
+checkpoint "agent-write-shared-workspace"
 AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'shared-workspace-check\\\\n' > issue23-shared-workspace.txt" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{cwd:"public-shared",command:$command}}}')")"
-jq -e '.result.isError != true and .error == null' <<<"$AGENT_WRITE" >/dev/null
-test ! -e "$ROOT/public-shared/.git"
+if ! jq -e '.result.isError != true and .error == null' <<<"$AGENT_WRITE" >/dev/null; then
+  echo "Agent shared-workspace write failed; sanitized MCP error follows:" >&2
+  jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$AGENT_WRITE" >&2
+  exit 1
+fi
+checkpoint "verify-agent-cannot-see-private-git-metadata"
+if [ -e "$ROOT/public-shared/.git" ]; then echo "private Git metadata marker leaked into Agent workspace" >&2; exit 1; fi
+checkpoint "verify-git-runner-sees-agent-shared-workspace"
 STATUS="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"git_execute",arguments:{operation:"status",account:"personal",path:"public-shared"}}}')")"
-jq -r '.result.content[]?.text // empty' <<<"$STATUS" | grep -q 'issue23-shared-workspace.txt'
+if ! jq -r '.result.content[]?.text // empty' <<<"$STATUS" | grep -q 'issue23-shared-workspace.txt'; then
+  echo "Git status did not see Agent-created file; sanitized MCP response follows:" >&2
+  jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$STATUS" >&2
+  exit 1
+fi
 checkpoint "commit-and-push-dry-run-without-token-exposure"
 PRIVATE_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "printf 'private-commit-check\\\\n' > README.md" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{cwd:"private-empty",command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_WRITE" >/dev/null

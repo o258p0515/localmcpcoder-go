@@ -120,7 +120,11 @@ jobs:
                 if isinstance(doc,dict) and isinstance(doc.get("records"),list):
                   summary["records_count"]=len(doc["records"])
                   summary["records"]=[{k:v for k,v in x.items() if k in ("id","parentId","type","name","state","result","log","issues")} for x in doc["records"][:12] if isinstance(x,dict)]
-                if isinstance(doc,dict) and "preview" in doc: summary["preview"]=doc["preview"][:500]
+                if isinstance(doc,dict) and "preview" in doc:
+                  summary["preview"]=doc["preview"][:500]
+                  summary["line_count"]=doc.get("line_count",len(doc["preview"].splitlines()))
+                  start_line=int(urllib.parse.parse_qs(urllib.parse.urlparse(path).query).get("startLine",[1])[0])
+                  summary["nextStartLine"]=start_line+summary["line_count"]
                 if isinstance(doc,str): summary={"preview":doc[:500],"line_count":len(doc.splitlines())}
                 print(json.dumps({"probe":label,"method":method,"path":path,"http_status":code,"content_type":ct,"result":"PASS" if 200<=code<300 else "FAIL","response":summary}))
                 return code,doc

@@ -218,6 +218,9 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 			return fail("clone did not create the expected separate Git metadata marker")
 		}
 		_ = os.Chmod(gitDir, 0700)
+		if e := makeSharedWorkspaceGroupWritable(repoPath); e != nil {
+			return fail("cannot set shared workspace group permissions")
+		}
 		if _, e := runSimpleGit(cctx, gitDir, "", hooksDir, "config", "user.name", "LocalMCP Git Executor"); e != nil {
 			return fail("cannot configure private Git author identity")
 		}
@@ -248,6 +251,17 @@ func gitBaseArgs(hooksDir string) []string {
 		"-c", "http.sslVerify=true", "-c", "http.https://github.com/.sslVerify=true",
 		"-c", "http.https://github.com/.proxy=",
 		"-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "commit.gpgsign=false"}
+}
+
+func makeSharedWorkspaceGroupWritable(root string) error {
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return err }
+		if info.Mode()&os.ModeSymlink != 0 { return nil }
+		if info.IsDir() { return os.Chmod(path, 02770) }
+		perms := (info.Mode().Perm() & 0700) | 0060
+		if info.Mode().Perm()&0100 != 0 { perms |= 0010 }
+		return os.Chmod(path, perms)
+	})
 }
 
 func privateGitDir(repoPath string) (string, error) {

@@ -77,7 +77,15 @@ jobs:
 
           SELECT_AGENT=$(jq -cn --arg a "$AGENT_RUNNER_ID" '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$a}}}')
           mcp_call "$SELECT_AGENT" | jq -e '.result.isError != true and .error == null' >/dev/null
-          BASH_CALL=$(jq -cn '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{command:"id -un; id -gn"}}}')
+
+          # Provision a unique Git worktree so a new runner pair never relies on
+          # state left behind by a previous workflow execution.
+          SHARED_PATH="public-shared-${GITHUB_RUN_ID}"
+          GIT_CLONE=$(jq -cn --arg path "$SHARED_PATH" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/localmcpcoder-go.git",destination:$path}}}')
+          GIT_CLONE_RESULT=$(mcp_call "$GIT_CLONE")
+          jq -e '.result.isError != true and .error == null' <<<"$GIT_CLONE_RESULT" >/dev/null
+
+          BASH_CALL=$(jq -cn --arg path "$SHARED_PATH" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"bash",arguments:{command:("mkdir -p " + $path + " && touch " + $path + "/issue23-shared-workspace.txt && id -un; id -gn")}}}')
           BASH_RESULT=$(mcp_call "$BASH_CALL")
           BASH_TEXT=$(echo "$BASH_RESULT" | jq -r '.result.content[]?.text // .error.message // empty')
           echo "$BASH_TEXT" | grep -q 'mcp-agent'
@@ -91,12 +99,12 @@ jobs:
           echo "$GIT_TEXT" | grep -q 'issue23-shared-workspace.txt'
           echo "git_execute auto-routed to the isolated Git runner and saw the Agent-created shared file."
 
-          GIT_BASH=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:6,method:"tools/call",params:{name:"bash",arguments:{command:"id",runner_id:$g}}}')
+          GIT_BASH=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"bash",arguments:{command:"id",runner_id:$g}}}')
           GIT_BASH_RESULT=$(mcp_call "$GIT_BASH")
           jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH_RESULT" >/dev/null
           echo "Explicit Git runner rejects Bash as expected."
 
-          SELECT_GIT=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$g}}}')
+          SELECT_GIT=$(jq -cn --arg g "$GIT_RUNNER_ID" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"select_runner",arguments:{runner_id:$g}}}')
           mcp_call "$SELECT_GIT" | jq -e '.result.isError != true and .error == null' >/dev/null
           BASH_AGAIN=$(mcp_call "$BASH_CALL")
           echo "$BASH_AGAIN" | jq -r '.result.content[]?.text // empty' | grep -q 'mcp-agent'

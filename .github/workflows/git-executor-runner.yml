@@ -101,6 +101,12 @@ jobs:
             --hub-urls "$HUB_URLS" --runner-id "$GIT_ID" --runner-tags "linux,git,isolated" \
             --tool-profile git-executor &
           GIT_PID=$!
+          wait -n "$AGENT_PID" "$GIT_PID"; FIRST_STATUS=$?
+          if [ "$FIRST_STATUS" -ne 124 ] && [ "$FIRST_STATUS" -ne 143 ]; then
+            echo "::error title=Paired runner stopped unexpectedly::First runner exited with $FIRST_STATUS"
+            sudo kill "$AGENT_PID" "$GIT_PID" 2>/dev/null || true
+            exit 1
+          fi
           wait "$AGENT_PID"; AGENT_STATUS=$?
           wait "$GIT_PID"; GIT_STATUS=$?
           set -e

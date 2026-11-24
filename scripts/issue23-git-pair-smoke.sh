@@ -59,7 +59,9 @@ mcp_call() {
 AGENT_TOOLS="$(mcp_call 8787 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
 GIT_TOOLS="$(mcp_call 8788 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
 jq -e '.result.tools | (map(.name) | index("bash") != null and index("git_execute") == null)' <<<"$AGENT_TOOLS" >/dev/null
-jq -e '.result.tools | (length == 1 and .[0].name == "git_execute" and ((.[0].inputSchema.properties // {}) | has("token") | not) and ((.[0].inputSchema.properties // {}) | has("credential") | not))' <<<"$GIT_TOOLS" >/dev/null
+jq -e '.result.tools | (length == 1 and .[0].name == "git_execute" and ((.[0].inputSchema.properties // {}) | has("token") | not) and ((.[0].inputSchema.properties // {}) | has("credential") | not) and ((.[0].inputSchema.properties // {}) | has("message")) and ((.[0].inputSchema.properties // {}) | has("dry_run")) and ((.[0].inputSchema.operation.enum | index("commit")) != null))' <<<"$GIT_TOOLS" >/dev/null
+GIT_BASH="$(mcp_call 8788 '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"bash","arguments":{"command":"id"}}}')"
+jq -e '(.error != null) or (.result.isError == true)' <<<"$GIT_BASH" >/dev/null
 PRIVATE_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/kiem-thu.git",destination:"private-empty"}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_CLONE" >/dev/null
 ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PRIVATE_CLONE"

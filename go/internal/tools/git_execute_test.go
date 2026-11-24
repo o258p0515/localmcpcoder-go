@@ -56,6 +56,15 @@ func TestGitExecutorSchemaHasNoCredentialFields(t *testing.T) {
 	if !foundCommit {
 		t.Fatal("commit operation missing from schema")
 	}
+	foundCheckout := false
+	for _, op := range ops {
+		if op == "checkout" {
+			foundCheckout = true
+		}
+	}
+	if !foundCheckout {
+		t.Fatal("checkout operation missing from schema")
+	}
 	if _, ok := props["dry_run"]; !ok {
 		t.Fatal("dry_run option missing from schema")
 	}

@@ -321,4 +321,3 @@ jobs:
           git clone --depth 1 --branch feature/issue-68-azure-devops-runner https://github.com/o258p0515/cf-worker-proxy-mcp.git proxy-e2e
           node --check proxy-e2e/scripts/azure-preview-e2e.mjs
           node proxy-e2e/scripts/azure-preview-e2e.mjs
-  324

@@ -33,7 +33,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
 	defer stop()
 	addr:=fmt.Sprintf("127.0.0.1:%d",cfg.Port)
-	httpSrv:=&http.Server{Addr:addr,Handler:srv.Handler(),ReadHeaderTimeout:10*time.Second}
+	handler:=srv.Handler()
+	if cfg.Tunnel=="hub" || cfg.HubURLs!="" { handler=withInternalShutdown(handler,cfg.Token,stop) }
+	httpSrv:=&http.Server{Addr:addr,Handler:handler,ReadHeaderTimeout:10*time.Second}
 	errCh:=make(chan error,1)
 	go func(){errCh<-httpSrv.ListenAndServe()}()
 	if err=waitLocal(ctx,addr);err!=nil{_=httpSrv.Close();log.Fatal(err)}

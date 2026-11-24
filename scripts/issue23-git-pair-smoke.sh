@@ -107,7 +107,7 @@ fi
 checkpoint "commit-and-push-dry-run-without-token-exposure"
 PRIVATE_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "cd $ROOT/private-empty && printf 'private-commit-check\\\\n' > README.md" '{jsonrpc:"2.0",id:8,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_WRITE" >/dev/null
-COMMIT="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:9,method:"tools/call",params:{name:"git_execute",arguments:{operation:"commit",account:"personal",path:"private-empty",message:"issue23 private metadata smoke"}}}')")"
+COMMIT="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:9,method:"tools/call",params:{name:"git_execute",arguments:{operation:"commit",account:"personal",path:"private-empty",message:"issue23 private metadata smoke",paths:["README.md"]}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$COMMIT" >/dev/null
 PUSH="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:10,method:"tools/call",params:{name:"git_execute",arguments:{operation:"push",account:"personal",path:"private-empty",ref:"main",dry_run:true}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$PUSH" >/dev/null

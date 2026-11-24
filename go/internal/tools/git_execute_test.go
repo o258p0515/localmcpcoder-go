@@ -67,6 +67,7 @@ func TestGitExecutorSchemaHasNoCredentialFields(t *testing.T) {
 	if !foundCheckout {
 		t.Fatal("checkout operation missing from schema")
 	}
+	if _, ok := props["paths"]; !ok { t.Fatal("explicit commit paths missing from schema") }
 	if _, ok := props["dry_run"]; !ok {
 		t.Fatal("dry_run option missing from schema")
 	}
@@ -98,6 +99,25 @@ func TestGitExecuteRejectsMissingExecutorTokenWithoutLeakingSecrets(t *testing.T
 		t.Fatalf("unexpected error: %s", got)
 	}
 }
+func TestValidatedCommitPathspecsRequireExplicitSafePaths(t *testing.T) {
+	root := t.TempDir()
+	if got, err := validatedCommitPathspecs(root, nil); err == nil || got != nil {
+		t.Fatalf("expected missing paths to fail, got %v err=%v", got, err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil { t.Skipf("symlink unavailable: %v", err) }
+	for _, path := range []string{"", ".", "../outside", "sub/../../outside", "/etc/passwd", "link"} {
+		if _, err := validatedCommitPathspecs(root, []string{path}); err == nil {
+			t.Errorf("accepted unsafe commit path %q", path)
+		}
+	}
+	got, err := validatedCommitPathspecs(root, []string{"README.md", "src/main.go", "README.md"})
+	if err != nil { t.Fatalf("valid paths rejected: %v", err) }
+	if strings.Join(got, ",") != ":(literal)README.md,:(literal)src/main.go" {
+		t.Fatalf("unexpected pathspecs: %#v", got)
+	}
+}
+
 func TestWithinRoot(t *testing.T) {
 	root := t.TempDir()
 	if !withinRoot(root, filepath.Join(root, "repo")) {

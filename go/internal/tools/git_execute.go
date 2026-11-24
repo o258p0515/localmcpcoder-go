@@ -105,8 +105,15 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		return fail("ref must be a valid branch name")
 	}
 	message := strings.TrimSpace(val(a, "message"))
+	commitPaths := stringArrayArg(a, "paths")
 	if op == "commit" && (message == "" || len(message) > 512 || strings.ContainsRune(message, '\x00')) {
 		return fail("commit requires a message of 1 to 512 characters")
+	}
+	var commitPathspecs []string
+	if op == "commit" {
+		var pathErr error
+		commitPathspecs, pathErr = validatedCommitPathspecs(repoPath, commitPaths)
+		if pathErr != nil { return fail(pathErr.Error()) }
 	}
 	dryRun, _ := a["dry_run"].(bool)
 
@@ -184,7 +191,8 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 		case "log":
 			args = append(args, "log", "-10", "--oneline", "--decorate")
 		case "commit":
-			args = append(args, "add", "-A", "--", ".")
+			args = append(args, "add", "-A", "--")
+			args = append(args, commitPathspecs...)
 		}
 	}
 
@@ -414,6 +422,53 @@ func gitSafeEnv(in []string) []string {
 		}
 	}
 	return out
+}
+
+func stringArrayArg(args map[string]any, key string) []string {
+	raw, ok := args[key].([]any)
+	if !ok { return nil }
+	values := make([]string, 0, len(raw))
+	for _, value := range raw {
+		text, ok := value.(string)
+		if !ok { return nil }
+		values = append(values, text)
+	}
+	return values
+}
+
+func validatedCommitPathspecs(repoRoot string, paths []string) ([]string, error) {
+	if len(paths) == 0 || len(paths) > 100 {
+		return nil, errors.New("commit requires 1 to 100 explicit relative paths")
+	}
+	specs := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, raw := range paths {
+		path := strings.TrimSpace(raw)
+		if path == "" || filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") {
+			return nil, errors.New("commit paths must be safe relative paths")
+		}
+		for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\\\' }) {
+			if part == ".." { return nil, errors.New("commit path traversal is not allowed") }
+		}
+		clean := filepath.Clean(path)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, errors.New("commit paths must name files or directories, not the whole workspace")
+		}
+		target := filepath.Join(repoRoot, clean)
+		if !withinRoot(repoRoot, target) || !safeParentPath(repoRoot, filepath.Dir(target)) {
+			return nil, errors.New("commit path is outside the repository workspace")
+		}
+		if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("commit paths cannot target symlinks")
+		} else if err != nil && !os.IsNotExist(err) {
+			return nil, errors.New("cannot inspect commit path")
+		}
+		slashPath := filepath.ToSlash(clean)
+		if _, ok := seen[slashPath]; ok { continue }
+		seen[slashPath] = struct{}{}
+		specs = append(specs, ":(literal)"+slashPath)
+	}
+	return specs, nil
 }
 
 func withinRoot(root, path string) bool {

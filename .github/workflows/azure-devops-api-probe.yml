@@ -345,8 +345,8 @@ jobs:
           cd proxy-e2e
           npm ci
           node scripts/prepare-preview.mjs
-          npx wrangler deploy --config wrangler.preview.jsonc
-          node scripts/sync-secrets.mjs | npx wrangler secret bulk --config wrangler.preview.jsonc
+          npx --yes wrangler@3 deploy --config wrangler.preview.jsonc
+          node scripts/sync-secrets.mjs | npx --yes wrangler@3 secret bulk --config wrangler.preview.jsonc
       - name: Live Azure DevOps runner E2E against Issue 68 preview
         if: ${{ inputs.run_preview_e2e }}
         env:

@@ -17,6 +17,14 @@ on:
         type: number
         required: true
         default: 20400
+      runner_os:
+        description: "GitHub-hosted runner operating system"
+        type: choice
+        required: true
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - windows-latest
 permissions:
   contents: read
 concurrency:
@@ -25,7 +33,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   runner:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_os || 'ubuntu-latest' }}
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
@@ -53,10 +61,13 @@ jobs:
           fi
       - name: Build and test Go runner
         working-directory: go
+        env:
+          BINARY_EXT: ${{ inputs.runner_os == 'windows-latest' && '.exe' || '' }}
+        shell: bash
         run: |
           set -euo pipefail
           go test ./...
-          go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp
+          go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp$BINARY_EXT" ./cmd/mcp
       - name: Start outbound Hub runner
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}
@@ -65,6 +76,7 @@ jobs:
           LOCALMCP_RUNNER_TAGS: ${{ inputs.runner_tags }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          BINARY_EXT: ${{ inputs.runner_os == 'windows-latest' && '.exe' || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -75,7 +87,7 @@ jobs:
           echo "Starting runner $LOCALMCP_RUNNER_ID for $DURATION_SECONDS seconds; Hub endpoint is masked."
           set +e
           timeout --signal=TERM --kill-after=40s "${DURATION_SECONDS}s" \
-            "$RUNNER_TEMP/localmcpcoder-mcp" --root "$ROOT" --tunnel hub \
+            "$RUNNER_TEMP/localmcpcoder-mcp$BINARY_EXT" --root "$ROOT" --tunnel hub \
             --hub-urls "$HUB_URLS" \
             --runner-id "$LOCALMCP_RUNNER_ID" --runner-tags "$LOCALMCP_RUNNER_TAGS"
           STATUS=$?

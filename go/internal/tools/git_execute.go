@@ -304,7 +304,7 @@ func makeSharedWorkspaceGroupWritable(root string) error {
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil { return err }
 		if info.Mode()&os.ModeSymlink != 0 { return nil }
-		if info.IsDir() { return os.Chmod(path, 03770) }
+		if info.IsDir() { return os.Chmod(path, 0770|os.ModeSetgid|os.ModeSticky) }
 		perms := (info.Mode().Perm() & 0700) | 0060
 		if info.Mode().Perm()&0100 != 0 { perms |= 0010 }
 		return os.Chmod(path, perms)

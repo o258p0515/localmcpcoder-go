@@ -46,10 +46,24 @@ jobs:
           BASE_URL="https://$HUB_DOMAIN"
           curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/issue23-runners.json
           jq -e --arg a "$AGENT_RUNNER_ID" --arg g "$GIT_RUNNER_ID" '
-            any(.[]; .runner_id == $a and .status == "online" and ((.tags // []) | index("agent") != null)) and
-            any(.[]; .runner_id == $g and .status == "online" and ((.tags // []) | index("git") != null) and ((.tags // []) | index("isolated") != null))
+            def pair_tag: [.tags[]? | select(startswith("pair:"))] | unique | if length == 1 then .[0] else "" end;
+            . as $all |
+            ($all | map(select(.status == "online" and ((.tags // []) | index("agent") != null)))) as $agents |
+            ($all | map(select(.status == "online" and ((.tags // []) | index("git") != null) and ((.tags // []) | index("isolated") != null)))) as $gits |
+            ($agents | map(pair_tag)) as $agent_pairs |
+            ($gits | map(pair_tag)) as $git_pairs |
+            ($agents | map(select(.runner_id == $a))) as $selected_agent |
+            ($gits | map(select(.runner_id == $g))) as $selected_git |
+            ($agents | length) >= 2 and ($gits | length) >= 2 and
+            ($agent_pairs | all(. != "")) and ($git_pairs | all(. != "")) and
+            (($agent_pairs | unique | length) == ($agent_pairs | length)) and
+            (($git_pairs | unique | length) == ($git_pairs | length)) and
+            (($agent_pairs | sort) == ($git_pairs | sort)) and
+            ($selected_agent | length) == 1 and ($selected_git | length) == 1 and
+            ($selected_agent[0] | pair_tag) != "" and
+            (($selected_agent[0] | pair_tag) == ($selected_git[0] | pair_tag))
           ' /tmp/issue23-runners.json >/dev/null
-          echo "Hub registry confirms the requested Agent and isolated Git runners are online."
+          echo "Hub registry confirms at least two complete Agent/Git pairs are online and the requested IDs share the same pair tag."
 
           curl --fail --silent --show-error -D /tmp/issue23-init.headers -o /tmp/issue23-init.json \
             -X POST "$BASE_URL/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \

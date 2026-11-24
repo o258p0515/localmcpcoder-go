@@ -46,8 +46,11 @@ jobs:
           BASE_URL="https://$HUB_DOMAIN"
           curl --fail --silent --show-error "$BASE_URL/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN" > /tmp/issue23-runners.json
           jq -e --arg a "$AGENT_RUNNER_ID" --arg g "$GIT_RUNNER_ID" '
+            ([.[] | select(.runner_id == $a) | (.tags // [])[] | select(startswith("pair:"))] | first // "") as $agent_pair |
+            ([.[] | select(.runner_id == $g) | (.tags // [])[] | select(startswith("pair:"))] | first // "") as $git_pair |
             any(.[]; .runner_id == $a and .status == "online" and ((.tags // []) | index("agent") != null)) and
-            any(.[]; .runner_id == $g and .status == "online" and ((.tags // []) | index("git") != null) and ((.tags // []) | index("isolated") != null))
+            any(.[]; .runner_id == $g and .status == "online" and ((.tags // []) | index("git") != null) and ((.tags // []) | index("isolated") != null)) and
+            ($agent_pair != "" and $agent_pair == $git_pair)
           ' /tmp/issue23-runners.json >/dev/null
           echo "Hub registry confirms the requested Agent and isolated Git runners are online."
 

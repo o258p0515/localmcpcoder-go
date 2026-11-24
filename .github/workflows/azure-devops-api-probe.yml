@@ -193,7 +193,7 @@ jobs:
                       pipeline_defs.append({"id":pipe["id"],"name":pname_def,"path":path})
                       api("A4-pipeline-detail-"+str(pipe["id"]),"GET",f"/{pname}/_apis/pipelines/{pipe['id']}")
                   def queue_and_poll(label,definition,live=False,windows=False,template_params=None,wrap_run_parameters=False):
-                    body={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}
+                    body={"resources":{"repositories":{"self":{"refName":branch}}}}
                     if template_params:
                       if wrap_run_parameters: body={"runParameters":{**body,"templateParameters":template_params}}
                       else: body["templateParameters"]=template_params
@@ -252,7 +252,7 @@ jobs:
                       queue_and_poll("C3-template-parameters-wrapper",params,template_params=param_values,wrap_run_parameters=True)
                   # Queue Linux and Windows back-to-back to observe real hosted parallelism/queue behavior.
                   if linux and win:
-                    common={"resources":{"repositories":{"self":{"repository":{"id":rid,"type":"azureReposGit"},"refName":branch}}}}
+                    common={"resources":{"repositories":{"self":{"refName":branch}}}}
                     _,cr1=api("C3-concurrency-linux-queue","POST",f"/{pname}/_apis/pipelines/{linux['id']}/runs",common)
                     _,cr2=api("C3-concurrency-windows-queue","POST",f"/{pname}/_apis/pipelines/{win['id']}/runs",common)
                     ids=[("linux",cr1.get("id")) if isinstance(cr1,dict) else ("linux",None),("windows",cr2.get("id")) if isinstance(cr2,dict) else ("windows",None)]

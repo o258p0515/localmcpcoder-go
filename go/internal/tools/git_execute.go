@@ -94,8 +94,12 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	if op != "clone" && !validPrivateGitDir(gitDir) {
 		return fail("no private Git metadata exists for this workspace; clone the repository first")
 	}
-	if op == "fetch" || op == "pull" || op == "push" {
-		if !validGitHubRemote(gitDir, repoPath, op == "push") {
+	credentialRepository := ""
+	if op == "clone" {
+		credentialRepository = strings.TrimSpace(val(a, "repository"))
+	} else if op == "fetch" || op == "pull" || op == "push" {
+		credentialRepository, err = gitRemoteURL(gitDir, repoPath, op == "push")
+		if err != nil {
 			return fail("origin and push URL must be GitHub HTTPS repository URLs")
 		}
 	}
@@ -113,7 +117,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 	needsCredential := op == "clone" || op == "fetch" || op == "pull" || op == "push"
 	var credential gitCredential
 	if needsCredential {
-		credential, err = r.fetchGitCredential(ctx, account, op)
+		credential, err = r.fetchGitCredential(ctx, account, op, credentialRepository)
 		if err != nil {
 			return fail("Git credential provider unavailable: " + err.Error())
 		}
@@ -346,14 +350,14 @@ func gitCommandFailure(err error, output, credential string) Result {
 	return fail("Git operation failed: " + redactCredential(err.Error(), credential))
 }
 
-func (r *Registry) fetchGitCredential(ctx context.Context, account, operation string) (gitCredential, error) {
+func (r *Registry) fetchGitCredential(ctx context.Context, account, operation, repository string) (gitCredential, error) {
 	executorToken := os.Getenv("GIT_EXECUTOR_TOKEN")
 	if len(executorToken) < 32 { return gitCredential{}, errors.New("dedicated Git executor token is not configured") }
 	endpoint, err := url.Parse(r.D.Config.GitCredentialURL)
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Path != "/internal/runner/git-credential" {
 		return gitCredential{}, errors.New("invalid credential provider endpoint")
 	}
-	body, _ := json.Marshal(map[string]string{"account": account, "operation": operation})
+	body, _ := json.Marshal(map[string]string{"account": account, "operation": operation, "repository": repository, "actor": os.Getenv("GITHUB_ACTOR"), "workflow_run_id": os.Getenv("GITHUB_RUN_ID")})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(string(body)))
 	if err != nil { return gitCredential{}, errors.New("cannot create credential provider request") }
 	req.Header.Set("Authorization", "Bearer "+executorToken)
@@ -445,7 +449,7 @@ func safeParentPath(root, path string) bool {
 		path = parent
 	}
 }
-func validGitHubRemote(gitDir, workTree string, checkPush bool) bool {
+func gitRemoteURL(gitDir, workTree string, checkPush bool) (string, error) {
 	args := append(gitBaseArgs(os.TempDir()), "--git-dir="+gitDir, "--work-tree="+workTree, "remote", "get-url")
 	if checkPush {
 		args = append(args, "--push")
@@ -455,7 +459,18 @@ func validGitHubRemote(gitDir, workTree string, checkPush bool) bool {
 	cmd.Dir = workTree
 	cmd.Env = append(gitSafeEnv(os.Environ()), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 	remote, err := cmd.Output()
-	return err == nil && githubRepoRE.MatchString(strings.TrimSpace(string(remote)))
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(remote))
+	if !githubRepoRE.MatchString(value) {
+		return "", errors.New("remote is not an allowed GitHub HTTPS repository URL")
+	}
+	return value, nil
+}
+func validGitHubRemote(gitDir, workTree string, checkPush bool) bool {
+	_, err := gitRemoteURL(gitDir, workTree, checkPush)
+	return err == nil
 }
 func validBranchRef(ref string) bool {
 	if len(ref) > 128 || strings.HasPrefix(ref, "-") || strings.ContainsAny(ref, "\x00\r\n") || strings.Contains(ref, "..") || strings.Contains(ref, "//") || strings.Contains(ref, "@{") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".") {

@@ -12,6 +12,11 @@ name: Azure DevOps REST API Probe
         required: false
         type: boolean
         default: false
+      inspect_build_id:
+        description: "Optional Azure Build ID whose failed task logs should be inspected (0 disables)"
+        required: false
+        type: string
+        default: "0"
 permissions:
   contents: read
 jobs:
@@ -348,3 +353,53 @@ jobs:
           echo "::add-mask::$MCP_TOKEN"
           node --check proxy-e2e/scripts/azure-preview-e2e.mjs
           node proxy-e2e/scripts/azure-preview-e2e.mjs
+      - name: Inspect failed Azure Build task logs
+        if: ${{ inputs.inspect_build_id != '0' }}
+        env:
+          BUILD_ID: ${{ inputs.inspect_build_id }}
+          AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+          AZURE_DEVOPS_ORG_URL: ${{ secrets.AZURE_DEVOPS_ORG_URL }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$AZURE_DEVOPS_PAT"
+          AUTH="$(printf ':%s' "$AZURE_DEVOPS_PAT" | base64 -w0)"
+          echo "::add-mask::$AUTH"
+          export AZDO_AUTH="$AUTH"
+          python3 - <<'PY'
+          import os, json, re, urllib.request, urllib.error, urllib.parse
+          org=os.environ["AZURE_DEVOPS_ORG_URL"].rstrip("/")
+          project=urllib.parse.quote("me", safe="")
+          build_id=int(os.environ["BUILD_ID"])
+          headers={"Authorization":"Basic "+os.environ["AZDO_AUTH"],"Accept":"application/json"}
+          def get(path, accept="application/json"):
+              req=urllib.request.Request(org+path+("&" if "?" in path else "?")+"api-version=7.1",headers={**headers,"Accept":accept})
+              try:
+                  with urllib.request.urlopen(req,timeout=25) as response:
+                      raw=response.read()
+              except urllib.error.HTTPError as error:
+                  raw=error.read()
+                  raise RuntimeError("Azure API returned HTTP "+str(error.code)+" for "+path+": "+raw[:300].decode("utf8","replace"))
+              if accept=="text/plain":
+                  return raw.decode("utf8","replace")
+              return json.loads(raw or b"{}")
+          timeline=get(f"/{project}/_apis/build/builds/{build_id}/timeline")
+          records=timeline.get("records",[])
+          failed=[record for record in records if record.get("type")=="Task" and (record.get("result")=="failed" or record.get("issues"))]
+          if not failed:
+              print("No failed task records found; timeline summary:")
+              print(json.dumps([{k:r.get(k) for k in ("name","state","result","log","issues")} for r in records if r.get("type")=="Task"],ensure_ascii=False))
+          for record in failed:
+              log_id=(record.get("log") or {}).get("id")
+              print("\\n=== FAILED TASK: "+str(record.get("name"))+" | log_id="+str(log_id)+" ===")
+              if not log_id:
+                  print(json.dumps(record.get("issues",[]),ensure_ascii=False)); continue
+              body=get(f"/{project}/_apis/build/builds/{build_id}/logs/{log_id}?startLine=1&endLine=160","text/plain")
+              lines=body.splitlines()
+              hits=[i for i,line in enumerate(lines) if re.search(r"error|exception|failed|exit code|invalid version|start-process|powershell",line,re.I)]
+              selected=set()
+              for i in hits:
+                  selected.update(range(max(0,i-2),min(len(lines),i+3)))
+              if not selected: selected.update(range(max(0,len(lines)-50),len(lines)))
+              for i in sorted(selected):
+                  print(f"{i+1}: {lines[i]}")
+          PY

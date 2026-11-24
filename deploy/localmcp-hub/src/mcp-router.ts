@@ -39,6 +39,20 @@ function metaTools() {
   ];
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("runner tools/list timed out")), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function listRunnerTools(env: Env): Promise<any[]> {
   // tools/list is a catalog operation, not a routed tool call: inspect every
   // online runner without requiring a session selection or a unique runner.
@@ -56,13 +70,13 @@ async function listRunnerTools(env: Env): Promise<any[]> {
       // A stalled runner must not prevent the Hub's static catalog from being
       // returned. The underlying request may finish later, but its result is
       // intentionally ignored after this bounded discovery window.
-      const payload = await Promise.race([
+      const payload = await withTimeout(
         runnerRequest(env, runner.runner_id, "dispatch", {
           payload: { jsonrpc: "2.0", id: "hub-tools-list", method: "tools/list", params: {} },
           tool_name: "tools/list"
         }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("runner tools/list timed out")), 5_000))
-      ]);
+        5_000
+      );
       return payload?.result?.tools ?? [];
     } catch {
       return [];

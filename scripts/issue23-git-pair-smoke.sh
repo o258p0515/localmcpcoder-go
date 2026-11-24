@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'rc=$?; printf "::error title=Smoke checkpoint failed::line=%s exit=%s\\n" "$LINENO" "$rc" >&2; trap - ERR; exit "$rc"' ERR
 test -n "$MCP_TOKEN"
 test -n "$GIT_CREDENTIAL_URL"
 test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"

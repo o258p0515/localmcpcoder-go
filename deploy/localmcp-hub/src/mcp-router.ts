@@ -1,5 +1,6 @@
 import type { Env, RunnerInfo } from "./types";
 import { injectRunnerArguments, stripRunnerArguments } from "./schema-injector";
+import { runnerToolCatalog } from "./tool-catalog";
 
 const json = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
 const error = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
@@ -38,6 +39,64 @@ function metaTools() {
   ];
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("runner tools/list timed out")), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function listRunnerTools(env: Env): Promise<any[]> {
+  // tools/list is a catalog operation, not a routed tool call: inspect every
+  // online runner without requiring a session selection or a unique runner.
+  const baseline = injectRunnerArguments(runnerToolCatalog);
+  const metaNames = new Set(metaTools().map((tool) => tool.name));
+  let runners: RunnerInfo[] = [];
+  try {
+    runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
+  } catch {
+    return baseline;
+  }
+  const online = runners.filter((runner) => runner.status === "online");
+  if (online.length === 0) return baseline;
+
+  const catalogs = await Promise.all(online.map(async (runner) => {
+    try {
+      // A stalled runner must not prevent the Hub's static catalog from being
+      // returned. The underlying request may finish later, but its result is
+      // intentionally ignored after this bounded discovery window.
+      const payload = await withTimeout(
+        runnerRequest(env, runner.runner_id, "dispatch", {
+          payload: { jsonrpc: "2.0", id: "hub-tools-list", method: "tools/list", params: {} },
+          tool_name: "tools/list"
+        }),
+        5_000
+      );
+      return payload?.result?.tools ?? [];
+    } catch {
+      return [];
+    }
+  }));
+
+  const merged = new Map<string, any>();
+  for (const tool of baseline) merged.set(tool.name, tool);
+  for (const tools of catalogs) {
+    for (const tool of injectRunnerArguments(tools)) {
+      if (tool && typeof tool.name === "string" && tool.name && !metaNames.has(tool.name)) {
+        merged.set(tool.name, tool);
+      }
+    }
+  }
+  return [...merged.values()];
+}
+
 async function resolveRunner(env: Env, session: string, headerId: string, argumentId?: string): Promise<{ runner?: RunnerInfo; runners: RunnerInfo[]; error?: string }> {
   const runners = await registry(env, { action: "listRunners" }) as RunnerInfo[];
   const online = runners.filter((r) => r.status === "online");
@@ -65,14 +124,8 @@ async function processRequest(request: Request, env: Env, session: string, rpc: 
   if (method === "ping") return json(id, {});
   if (method.startsWith("notifications/")) return null;
   if (method === "tools/list") {
-    const selected = await resolveRunner(env, session, request.headers.get("X-Runner-Id") ?? "");
-    if (!selected.runner) return json(id, { tools: metaTools() });
-    const payload = await runnerRequest(env, selected.runner.runner_id, "dispatch", {
-      payload: { jsonrpc: "2.0", id: "hub-tools-list", method: "tools/list", params: {} },
-      tool_name: "tools/list"
-    });
-    const tools = payload?.result?.tools ?? [];
-    return json(id, { tools: [...metaTools(), ...injectRunnerArguments(tools)] });
+    const tools = await listRunnerTools(env);
+    return json(id, { tools: [...metaTools(), ...tools] });
   }
   if (method !== "tools/call") return error(id, -32601, "Method not found");
   const name = String(params.name ?? "");

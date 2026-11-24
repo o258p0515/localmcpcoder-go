@@ -40,11 +40,13 @@ jobs:
           RUNNER_NAME="${RUNNER_NAME:-public-mcp}"
           RUNNER_TAGS="${RUNNER_TAGS:-linux,go,gha,public}"
           DURATION_SECONDS="${DURATION_SECONDS:-20400}"
-          if [[ ! "$RUNNER_NAME" =~ ^[A-Za-z0-9][-A-Za-z0-9._]{0,63}$ ]]; then
-            echo "::error title=Invalid runner name::Use 1-64 letters, numbers, dots, underscores, or hyphens."
+          SAFE_RUNNER_NAME="$(printf '%s' "$RUNNER_NAME" | LC_ALL=C tr -cd '[:alnum:]._-' )"
+          SAFE_RUNNER_TAGS="$(printf '%s' "$RUNNER_TAGS" | LC_ALL=C tr -cd '[:alnum:]._,: -')"
+          if [ -z "$RUNNER_NAME" ] || [ "${#RUNNER_NAME}" -gt 64 ] || [ "$SAFE_RUNNER_NAME" != "$RUNNER_NAME" ]; then
+            echo "::error title=Invalid runner name::Use 1-64 ASCII letters, numbers, dots, underscores, or hyphens."
             exit 1
           fi
-          if [[ ! "$RUNNER_TAGS" =~ ^[A-Za-z0-9._:, -]{1,200}$ ]]; then
+          if [ -z "$RUNNER_TAGS" ] || [ "${#RUNNER_TAGS}" -gt 200 ] || [ "$SAFE_RUNNER_TAGS" != "$RUNNER_TAGS" ]; then
             echo "::error title=Invalid runner tags::Use a comma-separated list of simple tags."
             exit 1
           fi

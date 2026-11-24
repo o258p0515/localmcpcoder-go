@@ -14,6 +14,12 @@ Meta-tools:
 
 Every remote runner tool schema includes optional `runner_id` and `async` arguments. An explicit runner ID overrides the session selection.
 
+### Session selection and `selected_runner`
+
+`select_runner(runner_id)` stores the default runner against the MCP session ID supplied by the client (`Mcp-Session-Id`). Subsequent tool calls in that same session use this default unless the call supplies its own `runner_id` or `X-Runner-Id` override.
+
+`list_runners` returns `selected_runner` as a convenience view of the default stored for the **current request's session**. It is not a global runner property or a property of the runner list. A `null` value means no default is stored for the session ID attached to that particular request; it does not prove that another session has no selection, that a previous selection failed, or that per-call routing is broken. Make sure the client reuses the same `Mcp-Session-Id` returned during initialization. To verify selection, call `list_runners` in the same session and then make a tool call without `runner_id`; verify the command executes on the selected machine. A separate session is expected to have an independent selection (and may correctly report `selected_runner: null`).
+
 ## Deploy
 
 The `Deploy LocalMCP Hub` workflow runs on pushes to `feat/localmcp-hub` and can also be dispatched manually once available on the default branch. It resolves the Cloudflare zone from the existing `CF_DOMAIN`, creates only the new proxied `hub.<zone>` DNS name when absent, derives only the separate `ADMIN_TOKEN` from `MCP_TOKEN`, deploys the Worker, and smoke-tests the endpoint. It never changes `CF_DOMAIN` or writes new GitHub Secrets. If a conflicting DNS record or an unrelated Worker route exists, deployment stops rather than taking it over.

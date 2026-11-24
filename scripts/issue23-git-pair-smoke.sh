@@ -79,6 +79,8 @@ if ! jq -e '.result.isError != true and .error == null' <<<"$PRIVATE_CLONE" >/de
 fi
 ! grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' <<<"$PRIVATE_CLONE"
 test ! -e "$ROOT/private-empty/.git"
+test "$(stat -c %a "$ROOT")" = "3770"
+test "$(stat -c %a "$ROOT/private-empty")" = "2770"
 checkpoint "public-clone-and-agent-shared-workspace"
 PUBLIC_CLONE="$(mcp_call 8788 "$(jq -cn '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"git_execute",arguments:{operation:"clone",account:"personal",repository:"https://github.com/o258p0515/localmcpcoder-go.git",destination:"public-shared"}}}')")"
 if ! jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev/null; then
@@ -86,6 +88,8 @@ if ! jq -e '.result.isError != true and .error == null' <<<"$PUBLIC_CLONE" >/dev
   jq -r '.result.content[]?.text // .error.message // "no error text"' <<<"$PUBLIC_CLONE" >&2
   exit 1
 fi
+test "$(stat -c %a "$ROOT")" = "3770"
+test "$(stat -c %a "$ROOT/public-shared")" = "2770"
 checkpoint "agent-write-shared-workspace"
 AGENT_WRITE="$(mcp_call 8787 "$(jq -cn --arg command "cd $ROOT/public-shared && printf 'shared-workspace-check\\\\n' > issue23-shared-workspace.txt && pwd && ls -la" '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')")"
 echo "Agent write diagnostics:" >&2

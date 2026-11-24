@@ -231,7 +231,7 @@ func (r *Registry) gitExecute(ctx context.Context, a map[string]any) Result {
 			return fail("clone did not create the expected separate Git metadata marker")
 		}
 		_ = os.Chmod(gitDir, 0700)
-		if e := makeSharedWorkspaceGroupWritable(root); e != nil {
+		if e := makeSharedWorkspaceGroupWritable(repoPath); e != nil {
 			return fail("cannot set shared workspace group permissions")
 		}
 		if _, e := runSimpleGit(cctx, gitDir, "", hooksDir, "config", "user.name", "LocalMCP Git Executor"); e != nil {
@@ -270,7 +270,7 @@ func makeSharedWorkspaceGroupWritable(root string) error {
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil { return err }
 		if info.Mode()&os.ModeSymlink != 0 { return nil }
-		if info.IsDir() { mode := os.FileMode(0770) | os.ModeSetgid; if path == root { mode |= os.ModeSticky }; return os.Chmod(path, mode) }
+		if info.IsDir() { return os.Chmod(path, os.FileMode(0770)|os.ModeSetgid) }
 		perms := (info.Mode().Perm() & 0700) | 0060
 		if info.Mode().Perm()&0100 != 0 { perms |= 0010 }
 		return os.Chmod(path, perms)

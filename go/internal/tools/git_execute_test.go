@@ -27,6 +27,38 @@ func TestGitExecutorProfileRegistersOnlyGitExecute(t *testing.T) {
 		t.Fatalf("unexpected tools: %#v", items)
 	}
 }
+
+func TestGitExecutorSchemaHasNoCredentialFields(t *testing.T) {
+	items := gitProfileRegistry(t).List()
+	if len(items) != 1 {
+		t.Fatalf("unexpected tool count: %d", len(items))
+	}
+	props, ok := items[0].InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("missing tool properties")
+	}
+	for _, forbidden := range []string{"token", "credential", "password", "access_token"} {
+		if _, exists := props[forbidden]; exists {
+			t.Fatalf("credential field %q leaked into schema", forbidden)
+		}
+	}
+	ops, ok := props["operation"].(map[string]any)["enum"].([]string)
+	if !ok {
+		t.Fatal("missing operation allowlist")
+	}
+	foundCommit := false
+	for _, op := range ops {
+		if op == "commit" {
+			foundCommit = true
+		}
+	}
+	if !foundCommit {
+		t.Fatal("commit operation missing from schema")
+	}
+	if _, ok := props["dry_run"]; !ok {
+		t.Fatal("dry_run option missing from schema")
+	}
+}
 func TestGitExecuteRejectsUntrustedRepositoryURLBeforeCredentialRequest(t *testing.T) {
 	r := gitProfileRegistry(t)
 	res := r.Call(context.Background(), "git_execute", map[string]any{"operation": "clone", "account": "personal", "repository": "https://attacker.example/owner/repo.git", "destination": "repo"})

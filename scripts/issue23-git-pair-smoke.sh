@@ -89,12 +89,16 @@ sudo -u mcp-git env ISSUE23_ISOLATION_SENTINEL=private-value sh -c \
   'install -d -m 700 /tmp/issue23-git-private; printf sentinel > /tmp/issue23-git-private/credential; chmod 600 /tmp/issue23-git-private/credential; exec sleep 90' &
 SENTINEL_PID=$!
 sleep 1
-GIT_SENTINEL_PID="$(pgrep -u mcp-git -f '^sleep 90$' | head -n1)"
-ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\000' '\\n' </proc/$GIT_SENTINEL_PID/environ 2>/dev/null | grep -q ISSUE23_ISOLATION_SENTINEL; then exit 42; fi; if ls /home/mcp-git/.localmcp-git/repos >/dev/null 2>&1; then exit 43; fi; if git -C public-shared rev-parse --git-dir >/dev/null 2>&1; then exit 44; fi; echo isolation-ok"
+GIT_SERVER_PID="$(pgrep -u mcp-git -f "$BIN" | head -n1)"
+ISOLATION_COMMAND="if cat /tmp/issue23-git-private/credential >/dev/null 2>&1; then exit 41; fi; if tr '\\000' '\\n' </proc/$GIT_SERVER_PID/environ 2>/dev/null | grep -q ACTIONS_ID_TOKEN_REQUEST_TOKEN; then exit 42; fi; if env | grep -q '^ACTIONS_ID_TOKEN_REQUEST_TOKEN='; then exit 43; fi; if ls /home/mcp-git/.localmcp-git/repos >/dev/null 2>&1; then exit 44; fi; if git -C public-shared rev-parse --git-dir >/dev/null 2>&1; then exit 45; fi; echo isolation-ok"
 ISOLATION="$(mcp_call 8787 "$(jq -cn --arg command "$ISOLATION_COMMAND" '{jsonrpc:"2.0",id:7,method:"tools/call",params:{name:"bash",arguments:{command:$command}}}')")"
 jq -e '.result.isError != true and .error == null' <<<"$ISOLATION" >/dev/null
 jq -r '.result.content[]?.text // empty' <<<"$ISOLATION" | grep -q 'isolation-ok'
 sudo kill "$SENTINEL_PID" 2>/dev/null || true
+if grep -Eqi 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]+' "$GIT_LOG" "$AGENT_LOG"; then
+  echo "credential-like value found in runner logs" >&2
+  exit 1
+fi
 if sudo find /tmp -maxdepth 1 -type d -name 'localmcp-git-auth-*' -print -quit | grep -q .; then
   echo "temporary Git credential directory was not cleaned" >&2
   exit 1

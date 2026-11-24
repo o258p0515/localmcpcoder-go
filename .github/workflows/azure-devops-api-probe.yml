@@ -47,7 +47,7 @@ jobs:
               if "message" in d: out["message"]=str(d["message"])[:300]
               if isinstance(d.get("value"),list):
                 out["count"]=len(d["value"])
-                out["items"]=[{x:v for x,v in z.items() if x in ("id","name","state","visibility","defaultBranch","remoteUrl","folder","revision","status","result","buildNumber","queueTime","startTime","finishTime","isHosted","lineCount")} for z in d["value"][:8] if isinstance(z,dict)]
+                out["items"]=[{x:v for x,v in z.items() if x in ("id","name","state","visibility","defaultBranch","remoteUrl","folder","revision","status","result","buildNumber","queueTime","startTime","finishTime","isHosted","lineCount")} for z in d["value"][:20] if isinstance(z,dict)]
               if isinstance(d.get("records"),list): out["records"]=[{x:v for x,v in z.items() if x in ("id","parentId","type","name","state","result","log","issues")} for z in d["records"][:12]]
             elif "preview" in d: out["preview"]=d["preview"]
             print(json.dumps(out))
@@ -126,6 +126,15 @@ jobs:
                 return code,doc
               try:
                 zero="0000000000000000000000000000000000000000"
+                # Restore a valid default branch after the first bootstrap probe left a deleted branch as default.
+                _,repo_state=api("PIPELINE-repository-state-before-restore","GET",f"/{pname}/_apis/git/repositories/{rid}")
+                if isinstance(repo_state,dict) and str(repo_state.get("defaultBranch","")).startswith("refs/heads/issue69-probe-"):
+                  restore_commit="a70d6c605d4eee68cce4a682ddb4b32d4f3ad60e"
+                  restore_push={"refUpdates":[{"name":"refs/heads/main","oldObjectId":zero}],"commits":[{"comment":"Restore empty Azure Repo default branch after Issue 69 probe cleanup","parents":[restore_commit],"changes":[{"changeType":"delete","item":{"path":"/.azure-pipelines/issue69-probe.yml"}}]}]}
+                  restore_code,_=api("PIPELINE-restore-empty-main","POST",f"/{pname}/_apis/git/repositories/{rid}/pushes",restore_push)
+                  if 200<=restore_code<300:
+                    api("PIPELINE-set-default-main","PATCH",f"/{pname}/_apis/git/repositories/{rid}",{"defaultBranch":"refs/heads/main"})
+                    api("PIPELINE-verify-default-main","GET",f"/{pname}/_apis/git/repositories/{rid}")
                 # Clean up resources left by an interrupted earlier probe before creating this run's assets.
                 _,old_pipelines=api("PIPELINE-stale-list","GET",f"/{pname}/_apis/pipelines")
                 for stale in (old_pipelines.get("value",[]) if isinstance(old_pipelines,dict) else []):
@@ -166,7 +175,23 @@ jobs:
                       api("C1-build-list-"+label,"GET",f"/{pname}/_apis/build/builds?definitions={definition['id']}&$top=10")
                     if not (200<=code<300 and run_id):
                       print(json.dumps({"probe":label,"result":"QUEUE_FAILED"})); return None
-                    deadline=time.time()+240
+                    def inspect_logs(phase):
+                      timeline=None
+                      records=[]
+                      for attempt in range(10 if live else 1):
+                        _,timeline=api("D1-"+phase+"-timeline","GET",f"/{pname}/_apis/build/builds/{run_id}/timeline")
+                        records=timeline.get("records",[]) if isinstance(timeline,dict) else []
+                        task=next((x for x in records if x.get("type")=="Task" and "Issue 69" in str(x.get("name","")) and isinstance(x.get("log"),dict) and x["log"].get("id")),None)
+                        if task: break
+                        if live: time.sleep(2)
+                      _,logs=api("D2-"+phase+"-logs","GET",f"/{pname}/_apis/build/builds/{run_id}/logs")
+                      items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
+                      lid=task["log"]["id"] if task else (items[-1]["id"] if items else None)
+                      if lid:
+                        api("D3-"+phase+"-text-page1","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=5",accept="text/plain")
+                        api("D3-"+phase+"-text-page2","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=6&endLine=10",accept="text/plain")
+                        api("D3-"+phase+"-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=5",accept="application/json")
+                      else: print(json.dumps({"probe":"D3-"+phase,"result":"BLOCKED_NO_STEP_LOG","records_count":len(records),"logs_count":len(items)}))
                     current=None
                     for _ in range(40):
                       _,current=api(label+"-status","GET",f"/{pname}/_apis/build/builds/{run_id}")
@@ -174,26 +199,14 @@ jobs:
                       if live and isinstance(current,dict) and current.get("status")=="inProgress": break
                       time.sleep(6)
                     if live and isinstance(current,dict) and current.get("status")=="inProgress":
-                      api("D1-live-timeline","GET",f"/{pname}/_apis/build/builds/{run_id}/timeline")
-                      _,logs=api("D2-live-logs","GET",f"/{pname}/_apis/build/builds/{run_id}/logs")
-                      items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
-                      if items:
-                        lid=items[0]["id"]
-                        api("D3-live-text","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
-                        api("D3-live-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
+                      inspect_logs("live")
                       api("C4-cancel","PATCH",f"/{pname}/_apis/build/builds/{run_id}",{"status":"cancelling"})
                       for _ in range(12):
                         _,current=api("C4-poll-cancel","GET",f"/{pname}/_apis/build/builds/{run_id}")
                         if isinstance(current,dict) and current.get("status")=="completed": break
                         time.sleep(5)
                     elif isinstance(current,dict) and current.get("status")=="completed":
-                      api("D1-final-timeline","GET",f"/{pname}/_apis/build/builds/{run_id}/timeline")
-                      _,logs=api("D2-final-logs","GET",f"/{pname}/_apis/build/builds/{run_id}/logs")
-                      items=logs.get("value",[]) if isinstance(logs,dict) else logs.get("logs",[]) if isinstance(logs,dict) else []
-                      if items:
-                        lid=items[0]["id"]
-                        api("D3-final-text","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="text/plain")
-                        api("D3-final-json","GET",f"/{pname}/_apis/build/builds/{run_id}/logs/{lid}?startLine=1&endLine=50",accept="application/json")
+                      inspect_logs("final")
                     print(json.dumps({"probe":label+"-summary","run_id":run_id,"status":current.get("status") if isinstance(current,dict) else None,"result":current.get("result") if isinstance(current,dict) else None}))
                     return run_id
                   linux=next((x for x in pipeline_defs if "linux.yml" in x["path"]),None)

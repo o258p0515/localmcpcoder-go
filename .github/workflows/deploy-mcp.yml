@@ -1,10 +1,11 @@
-name: Deploy one public MCP runner # refresh runner deployment
+name: Deploy one Hub MCP runner
 on:
   push:
     branches: [main]
     paths:
       - 'go/**'
       - '.github/workflows/example-run.yml'
+      - '.github/workflows/hub-runner.yml'
       - '.github/workflows/deploy-mcp.yml'
   workflow_dispatch:
 
@@ -13,18 +14,17 @@ permissions:
   contents: read
 
 jobs:
-  replace-runner:
+  dispatch-hub-runner:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # The target workflow owns runner exclusivity through concurrency:
-      # group: public-mcp-runner, cancel-in-progress: true.
-      - name: Start exactly one fresh public MCP runner
+      - name: Dispatch the stable public Hub runner
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Dispatching one fresh public MCP runner; concurrency will cancel the previous instance."
+          echo "Dispatching example-run.yml compatibility entrypoint; it starts a Hub-only runner."
           gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/example-run.yml/dispatches" -f ref=main
-          echo "Dispatched one fresh public MCP runner."
+          echo "Hub-only public runner dispatch accepted."

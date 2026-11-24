@@ -39,9 +39,9 @@ jobs:
               RUN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
               JOB_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=20")"
               JOB_ID="$(jq -r '[.jobs[]] | .[0].id // empty' <<<"$JOB_JSON")"
-              CF_STEP_STATUS="$(jq -r '[.jobs[].steps[]? | select(.name == "Provision Cloudflare named tunnel and DNS with Global API Key")][0].status // empty' <<<"$JOB_JSON")"
+              HUB_DISPATCH_STEP_STATUS="$(jq -r '[.jobs[].steps[]? | select(.name == "Dispatch Hub-only runner workflow")][0].status // empty' <<<"$JOB_JSON")"
               RUN_STATUS="$(jq -r '.status' <<<"$RUN_JSON")"
-              if [ "$CF_STEP_STATUS" = "completed" ] || [ "$RUN_STATUS" = "completed" ]; then
+              if [ "$HUB_DISPATCH_STEP_STATUS" = "completed" ] || [ "$RUN_STATUS" = "completed" ]; then
                 break
               fi
             fi
@@ -54,9 +54,9 @@ jobs:
             --arg status "$(jq -r '.status // "not-found"' <<<"$RUN_JSON")" \
             --arg conclusion "$(jq -r '.conclusion // empty' <<<"$RUN_JSON")" \
             --arg job_id "$JOB_ID" \
-            --arg cloudflare_step_status "$(jq -r '[.jobs[].steps[]? | select(.name == "Provision Cloudflare named tunnel and DNS with Global API Key")][0].status // empty' <<<"$JOB_JSON")" \
-            --arg cloudflare_step_conclusion "$(jq -r '[.jobs[].steps[]? | select(.name == "Provision Cloudflare named tunnel and DNS with Global API Key")][0].conclusion // empty' <<<"$JOB_JSON")" \
-            '{run_id:$run_id,run_url:$run_url,status:$status,conclusion:$conclusion,job_id:$job_id,cloudflare_step_status:$cloudflare_step_status,cloudflare_step_conclusion:$cloudflare_step_conclusion}')"
+            --arg hub_dispatch_step_status "$(jq -r '[.jobs[].steps[]? | select(.name == "Dispatch Hub-only runner workflow")][0].status // empty' <<<"$JOB_JSON")" \
+            --arg hub_dispatch_step_conclusion "$(jq -r '[.jobs[].steps[]? | select(.name == "Dispatch Hub-only runner workflow")][0].conclusion // empty' <<<"$JOB_JSON")" \
+            '{run_id:$run_id,run_url:$run_url,status:$status,conclusion:$conclusion,job_id:$job_id,hub_dispatch_step_status:$hub_dispatch_step_status,hub_dispatch_step_conclusion:$hub_dispatch_step_conclusion}')"
           ENCODED="$(printf '%s' "$STATUS" | base64 -w0)"
           PATH_IN_REPO=".github/runner-dispatch-status.json"
           FILE_SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/$PATH_IN_REPO" --jq .sha 2>/dev/null || true)"

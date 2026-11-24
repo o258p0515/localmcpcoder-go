@@ -20,8 +20,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: localmcp-hub-runner-${{ github.run_id }}
-  cancel-in-progress: false
+  # Same runner name replaces its prior instance; different names remain parallel.
+  group: localmcp-hub-runner-${{ inputs.runner_name || github.run_id }}
+  cancel-in-progress: true
 jobs:
   runner:
     runs-on: ubuntu-latest

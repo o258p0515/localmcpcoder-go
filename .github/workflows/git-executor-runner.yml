@@ -72,7 +72,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$RUNNER_TEMP/issue23-shared-workspace"
+          ROOT="/tmp/issue23-shared-workspace-$GITHUB_RUN_ID"
+          BIN="/tmp/localmcpcoder-git-executor-$GITHUB_RUN_ID"
+          sudo install -m 0755 "$RUNNER_TEMP/localmcpcoder-git-executor" "$BIN"
           mkdir -p "$ROOT"
           sudo groupadd --system mcp-workspace 2>/dev/null || true
           sudo useradd --system --create-home --home-dir /home/mcp-agent --shell /usr/sbin/nologin mcp-agent 2>/dev/null || true
@@ -89,7 +91,7 @@ jobs:
           set +e
           sudo -u mcp-agent env -i PATH="$PATH" HOME=/home/mcp-agent MCP_TOKEN="$MCP_TOKEN" HUB_URLS="$HUB_URLS" \
             timeout --signal=TERM --kill-after=40s "$DURATION_SECONDS" \
-            "$RUNNER_TEMP/localmcpcoder-git-executor" --root "$ROOT" --port 8787 --tunnel hub \
+            "$BIN" --root "$ROOT" --port 8787 --tunnel hub \
             --hub-urls "$HUB_URLS" --runner-id "$AGENT_ID" --runner-tags "linux,agent,issue23" &
           AGENT_PID=$!
           sudo -u mcp-git env -i PATH="$PATH" HOME=/home/mcp-git MCP_TOKEN="$MCP_TOKEN" HUB_URLS="$HUB_URLS" \

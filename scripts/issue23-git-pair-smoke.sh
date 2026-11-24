@@ -5,8 +5,8 @@ test -n "$GIT_CREDENTIAL_URL"
 test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"
 test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
 test -n "$RUNNER_TEMP"
-BIN="$RUNNER_TEMP/localmcpcoder-git-executor"
-ROOT="$RUNNER_TEMP/issue23-shared-workspace"
+BIN="/tmp/localmcpcoder-git-executor-$GITHUB_RUN_ID"
+ROOT="/tmp/issue23-shared-workspace-$GITHUB_RUN_ID"
 AGENT_LOG="$RUNNER_TEMP/issue23-agent-smoke.log"
 GIT_LOG="$RUNNER_TEMP/issue23-git-smoke.log"
 AGENT_PID=""
@@ -21,6 +21,7 @@ cleanup() {
   sudo rm -rf /tmp/issue23-git-private
 }
 trap cleanup EXIT
+sudo install -m 0755 "$RUNNER_TEMP/localmcpcoder-git-executor" "$BIN"
 sudo groupadd --system mcp-workspace 2>/dev/null || true
 sudo useradd --system --create-home --home-dir /home/mcp-agent --shell /usr/sbin/nologin mcp-agent 2>/dev/null || true
 sudo useradd --system --create-home --home-dir /home/mcp-git --shell /usr/sbin/nologin mcp-git 2>/dev/null || true

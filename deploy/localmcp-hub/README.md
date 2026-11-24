@@ -32,8 +32,8 @@ For GitHub-hosted runners, configure `HUB_URLS` and `MCP_TOKEN` as Actions repos
 After the `hub-runner.yml` workflow is available on the default branch:
 
 1. Dispatch `LocalMCP Hub Runner` once per machine.
-2. Give each dispatch a unique `runner_name` (for example `build-01`, `test-his`) and optional `runner_tags`.
-3. Keep the returned workflow run IDs; each runner ID is `<runner_name>-<workflow_run_id>`.
+2. Choose `runner_os` (`linux` or `windows`), set a display `runner_name` (for example `build-01`, `test-his`) and optional `runner_tags`.
+3. Keep the returned workflow run IDs; runner IDs are unique per run (`gh-linux-<run_id>` or `gh-win-<run_id>`), independent of display name.
 4. Use `duration_seconds` to control lifetime. The default is 20,400 seconds (5h40m), leaving a margin before the GitHub Actions job limit.
 
 Multiple dispatches run independently; the workflow does not use the protected `example-run.yml`.

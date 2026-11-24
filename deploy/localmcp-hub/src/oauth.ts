@@ -1,6 +1,15 @@
 import type { Env } from "./types";
 
 type Claims = { typ: "code" | "access" | "refresh"; sub: string; exp: number; scope?: string; redirect_uri?: string; challenge?: string; state?: string; jti: string };
+type OAuthClient = {
+  client_id: string;
+  client_name: string;
+  token_endpoint_auth_method: "none" | "client_secret_basic" | "client_secret_post";
+  client_secret?: string;
+  client_secret_hash?: string;
+  redirect_uris: string[];
+};
+
 const enc = (bytes: Uint8Array) => {
   let raw = ""; for (const byte of bytes) raw += String.fromCharCode(byte);
   return btoa(raw).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -15,19 +24,27 @@ const equal = (a: string, b: string) => {
   for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
   return diff === 0;
 };
+async function sha256Hex(value: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 function redirects(env: Env): string[] {
   const raw = env.MCP_OAUTH_REDIRECT_URIS?.trim() ?? "";
   if (!raw) return [];
   try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) return parsed.filter((v): v is string => typeof v === "string"); } catch { /* accept newline/comma separated secrets */ }
   return raw.split(/[\r\n,]+/).map((v) => v.trim()).filter(Boolean);
 }
-function allowedRedirect(env: Env, value: string): boolean {
+export function isValidRedirectUri(value: string): boolean {
   try {
     const u = new URL(value);
     if (!["https:", "http:"].includes(u.protocol) || u.username || u.password || u.hash) return false;
     if (u.protocol === "http:" && u.hostname !== "localhost" && u.hostname !== "127.0.0.1" && u.hostname !== "[::1]") return false;
-    return redirects(env).includes(value);
+    return true;
   } catch { return false; }
+}
+function clientAllowsRedirect(client: OAuthClient, value: string): boolean {
+  if (!isValidRedirectUri(value)) return false;
+  return client.redirect_uris.includes(value);
 }
 async function key(env: Env): Promise<CryptoKey> {
   if (!env.MCP_TOKEN) throw new Error("MCP_TOKEN is not configured");
@@ -64,17 +81,45 @@ async function form(request: Request): Promise<Record<string, string>> {
   data.forEach((value, name) => { if (typeof value === "string") result[name] = value; });
   return result;
 }
-function clientValid(env: Env, id: string, secret: string): boolean {
-  return !!env.MCP_OAUTH_CLIENT_ID && equal(id, env.MCP_OAUTH_CLIENT_ID) &&
-    !!env.MCP_OAUTH_CLIENT_SECRET && equal(secret, env.MCP_OAUTH_CLIENT_SECRET);
+async function registryCall(env: Env, body: Record<string, unknown>): Promise<any> {
+  const stub = env.REGISTRY_DO.get(env.REGISTRY_DO.idFromName("global"));
+  const response = await stub.fetch("https://registry/internal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json() as any;
+  if (!response.ok) throw new Error(data.error ?? "OAuth registry operation failed");
+  return data.result;
+}
+async function resolveClient(env: Env, id: string): Promise<OAuthClient | null> {
+  if (!id) return null;
+  if (env.MCP_OAUTH_CLIENT_ID && equal(id, env.MCP_OAUTH_CLIENT_ID)) {
+    return {
+      client_id: env.MCP_OAUTH_CLIENT_ID,
+      client_name: "Configured MCP client",
+      token_endpoint_auth_method: env.MCP_OAUTH_CLIENT_SECRET ? "client_secret_basic" : "none",
+      client_secret: env.MCP_OAUTH_CLIENT_SECRET,
+      redirect_uris: redirects(env)
+    };
+  }
+  try {
+    const stored = await registryCall(env, { action: "getOAuthClient", client_id: id });
+    if (stored && typeof stored.client_id === "string" && Array.isArray(stored.redirect_uris)) {
+      return stored as OAuthClient;
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+async function authenticateClient(client: OAuthClient, secret: string): Promise<boolean> {
+  if (client.token_endpoint_auth_method === "none") return true;
+  if (client.client_secret) return !!secret && equal(secret, client.client_secret);
+  if (client.client_secret_hash) return !!secret && equal(await sha256Hex(secret), client.client_secret_hash);
+  return false;
 }
 async function registryGrant(env: Env, action: "storeOAuthGrant" | "consumeOAuthGrant", jti: string, grantType: "code" | "refresh", expiresAt?: number): Promise<boolean> {
-  const stub = env.REGISTRY_DO.get(env.REGISTRY_DO.idFromName("global"));
-  const response = await stub.fetch("https://registry/internal", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, jti, grant_type: grantType, ...(expiresAt === undefined ? {} : { expires_at: expiresAt }) }) });
-  const data = await response.json() as any;
-  if (!response.ok) throw new Error(data.error ?? "OAuth grant storage failed");
-  return action === "storeOAuthGrant" ? data.result?.stored === true : data.result?.consumed === true;
+  const result = await registryCall(env, { action, jti, grant_type: grantType, ...(expiresAt === undefined ? {} : { expires_at: expiresAt }) });
+  return action === "storeOAuthGrant" ? result?.stored === true : result?.consumed === true;
 }
 async function issueTokens(env: Env, clientId: string) {
   const now = Math.floor(Date.now() / 1000), refreshJti = randomId();
@@ -96,15 +141,53 @@ export async function verifyOAuthAccessToken(token: string, signingSecret: strin
 }
 export async function handleOAuthRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  if (url.pathname === "/register" && request.method === "POST") {
+    let body: any;
+    try { body = await request.json(); } catch { return json({ error: "invalid_client_metadata" }, 400); }
+    const uris = Array.isArray(body?.redirect_uris) ? body.redirect_uris : [];
+    if (uris.length === 0 || uris.some((uri: unknown) => typeof uri !== "string" || !isValidRedirectUri(uri))) {
+      return json({ error: "invalid_redirect_uri" }, 400);
+    }
+    const authMethod = String(body?.token_endpoint_auth_method ?? "none");
+    if (!["none", "client_secret_basic", "client_secret_post"].includes(authMethod)) {
+      return json({ error: "invalid_client_metadata" }, 400);
+    }
+    const clientId = "dcr_" + randomId();
+    const clientName = String(body?.client_name ?? "Dynamic MCP client").slice(0, 128);
+    const clientSecret = authMethod === "none" ? undefined : randomId();
+    const clientSecretHash = clientSecret ? await sha256Hex(clientSecret) : undefined;
+    const expiresAt = Date.now() + 90 * 24 * 60 * 60 * 1000;
+    await registryCall(env, {
+      action: "registerOAuthClient",
+      client_id: clientId,
+      client_name: clientName,
+      token_endpoint_auth_method: authMethod,
+      client_secret_hash: clientSecretHash ?? null,
+      redirect_uris: uris,
+      expires_at: expiresAt
+    });
+    return json({
+      client_id: clientId,
+      client_name: clientName,
+      redirect_uris: uris,
+      token_endpoint_auth_method: authMethod,
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      scope: "mcp:tools",
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      ...(clientSecret ? { client_secret: clientSecret } : {})
+    }, 201);
+  }
   if (url.pathname === "/authorize" && request.method === "GET") {
     const p = url.searchParams, clientId = p.get("client_id") ?? "", redirect = p.get("redirect_uri") ?? "";
-    if (p.get("response_type") !== "code" || !env.MCP_OAUTH_CLIENT_ID || !equal(clientId, env.MCP_OAUTH_CLIENT_ID) ||
-        !allowedRedirect(env, redirect) || !p.get("code_challenge") || p.get("code_challenge_method") !== "S256") {
+    const client = await resolveClient(env, clientId);
+    if (p.get("response_type") !== "code" || !client || !clientAllowsRedirect(client, redirect) ||
+        !p.get("code_challenge") || p.get("code_challenge_method") !== "S256") {
       return new Response("Invalid OAuth request: client, redirect URI and PKCE S256 are required", { status: 400 });
     }
     const csrf = randomId();
     const html = '<!doctype html><meta charset="utf-8"><title>Authorize LocalMCP Hub</title><h1>Authorize LocalMCP Hub</h1><p>Client: ' +
-      escapeHtml(clientId) + '</p><p>Redirect: <code>' + escapeHtml(redirect) + '</code></p>' +
+      escapeHtml(client.client_name) + ' (<code>' + escapeHtml(clientId) + '</code>)</p><p>Redirect: <code>' + escapeHtml(redirect) + '</code></p>' +
       '<form method="post" action="/authorize"><input type="hidden" name="csrf" value="' + csrf + '">' +
       '<input type="hidden" name="client_id" value="' + escapeHtml(clientId) + '">' +
       '<input type="hidden" name="redirect_uri" value="' + escapeHtml(redirect) + '">' +
@@ -120,8 +203,10 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
       return new Response("Authorization denied", { status: 403 });
     }
     const clientId = b.client_id ?? "", redirect = b.redirect_uri ?? "";
-    if (!env.MCP_OAUTH_CLIENT_ID || !equal(clientId, env.MCP_OAUTH_CLIENT_ID) || !allowedRedirect(env, redirect) ||
-        !b.code_challenge || !b.state && b.state !== "") return new Response("Invalid OAuth authorization", { status: 400 });
+    const client = await resolveClient(env, clientId);
+    if (!client || !clientAllowsRedirect(client, redirect) || !b.code_challenge || (!b.state && b.state !== "")) {
+      return new Response("Invalid OAuth authorization", { status: 400 });
+    }
     const now = Math.floor(Date.now() / 1000);
     const codeJti = randomId();
     await registryGrant(env, "storeOAuthGrant", codeJti, "code", (now + 300) * 1000);
@@ -137,11 +222,12 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
       try { const decoded = atob(basic); const i = decoded.indexOf(":"); clientId = decoded.slice(0, i); clientSecret = decoded.slice(i + 1); }
       catch { return json({ error: "invalid_client" }, 401); }
     }
-    if (!clientValid(env, clientId, clientSecret)) return json({ error: "invalid_client" }, 401);
+    const client = await resolveClient(env, clientId);
+    if (!client || !await authenticateClient(client, clientSecret)) return json({ error: "invalid_client" }, 401);
     if (b.grant_type === "authorization_code") {
       const claims = await verify(env, b.code ?? "");
       if (!claims || claims.typ !== "code" || claims.sub !== clientId || claims.redirect_uri !== b.redirect_uri ||
-          !allowedRedirect(env, b.redirect_uri ?? "") || !claims.challenge || await pkce(b.code_verifier ?? "") !== claims.challenge) {
+          !clientAllowsRedirect(client, b.redirect_uri ?? "") || !claims.challenge || await pkce(b.code_verifier ?? "") !== claims.challenge) {
         return json({ error: "invalid_grant" }, 400);
       }
       if (!await registryGrant(env, "consumeOAuthGrant", claims.jti, "code")) return json({ error: "invalid_grant" }, 400);

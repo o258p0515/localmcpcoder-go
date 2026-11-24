@@ -10,6 +10,7 @@ export class RegistryDO {
     this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS session_targets (session_key TEXT PRIMARY KEY, runner_id TEXT NOT NULL, updated_at INTEGER NOT NULL)");
     this.state.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runners_status ON runners(status)");
     this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS oauth_grants (jti TEXT PRIMARY KEY, grant_type TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+    this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS oauth_clients (client_id TEXT PRIMARY KEY, client_name TEXT NOT NULL, token_endpoint_auth_method TEXT NOT NULL, client_secret_hash TEXT, redirect_uris_json TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
   }
   async fetch(request: Request): Promise<Response> {
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
@@ -26,6 +27,8 @@ export class RegistryDO {
         case "setSessionRunner": result = this.setSessionRunner(String(body.session_key ?? ""), String(body.runner_id ?? "")); break;
         case "storeOAuthGrant": result = this.storeOAuthGrant(String(body.jti ?? ""), String(body.grant_type ?? ""), Number(body.expires_at)); break;
         case "consumeOAuthGrant": result = this.consumeOAuthGrant(String(body.jti ?? ""), String(body.grant_type ?? "")); break;
+        case "registerOAuthClient": result = this.registerOAuthClient(body as any); break;
+        case "getOAuthClient": result = this.getOAuthClient(String(body.client_id ?? "")); break;
         default: return Response.json({ error: "unknown registry action" }, { status: 400 });
       }
       return Response.json({ result });
@@ -82,6 +85,48 @@ export class RegistryDO {
     if (!row) return { consumed: false };
     this.state.storage.sql.exec("DELETE FROM oauth_grants WHERE jti=? AND grant_type=?", jti, grantType);
     return { consumed: true };
+  }
+  private registerOAuthClient(input: {
+    client_id: string;
+    client_name: string;
+    token_endpoint_auth_method: string;
+    client_secret_hash?: string | null;
+    redirect_uris: string[];
+    expires_at: number;
+  }): { registered: boolean } {
+    if (!input.client_id || !Array.isArray(input.redirect_uris) || input.redirect_uris.length === 0 || !Number.isSafeInteger(input.expires_at) || input.expires_at <= Date.now()) {
+      throw new Error("invalid OAuth client registration");
+    }
+    this.state.storage.sql.exec("DELETE FROM oauth_clients WHERE expires_at <= ?", Date.now());
+    this.state.storage.sql.exec(
+      "INSERT OR REPLACE INTO oauth_clients(client_id,client_name,token_endpoint_auth_method,client_secret_hash,redirect_uris_json,created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
+      input.client_id,
+      String(input.client_name || "Dynamic MCP client"),
+      String(input.token_endpoint_auth_method || "none"),
+      input.client_secret_hash ?? null,
+      JSON.stringify(input.redirect_uris),
+      Date.now(),
+      input.expires_at
+    );
+    return { registered: true };
+  }
+  private getOAuthClient(clientId: string): Record<string, unknown> | null {
+    if (!clientId) return null;
+    const row = this.state.storage.sql.exec<any>(
+      "SELECT client_id,client_name,token_endpoint_auth_method,client_secret_hash,redirect_uris_json FROM oauth_clients WHERE client_id=? AND expires_at>?",
+      clientId,
+      Date.now()
+    ).toArray()[0];
+    if (!row) return null;
+    let redirectUris: string[] = [];
+    try { redirectUris = JSON.parse(String(row.redirect_uris_json ?? "[]")); } catch { redirectUris = []; }
+    return {
+      client_id: String(row.client_id),
+      client_name: String(row.client_name),
+      token_endpoint_auth_method: String(row.token_endpoint_auth_method),
+      ...(row.client_secret_hash ? { client_secret_hash: String(row.client_secret_hash) } : {}),
+      redirect_uris: redirectUris
+    };
   }
   private rowToRunner(row: any): RunnerInfo {
     let tags: string[] = [];

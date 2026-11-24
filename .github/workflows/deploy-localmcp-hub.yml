@@ -1,7 +1,11 @@
 name: Deploy LocalMCP Hub
 on:
   push:
-    branches: [feat/localmcp-hub]
+    branches: [main]
+    paths:
+      - 'deploy/localmcp-hub/**'
+      - 'go/**'
+      - '.github/workflows/deploy-localmcp-hub.yml'
   workflow_dispatch:
     inputs:
       run_e2e:
@@ -90,13 +94,6 @@ jobs:
           printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --config wrangler.deploy.jsonc
           printf '%s' "$MCP_OAUTH_REDIRECT_URIS" | npx wrangler secret put MCP_OAUTH_REDIRECT_URIS --config wrangler.deploy.jsonc
           printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN --config wrangler.deploy.jsonc
-      - name: Export public Hub endpoint for Proxy integration
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf 'HUB_ENDPOINT_ASCII='
-          printf '%s' "$HUB_DOMAIN" | od -An -tu1 -v | xargs | tr ' ' ','
-          printf '\\n'
       - name: Smoke test Hub endpoints
         env:
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
@@ -113,11 +110,13 @@ jobs:
           INIT=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"hub-smoke","version":"1"}}}')
           echo "$INIT" | grep -q 'localmcp-hub'
           OAUTH_META=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/.well-known/oauth-authorization-server")
-          echo "$OAUTH_META" | jq -e --arg endpoint "https://$HUB_DOMAIN/authorize" --arg token "https://$HUB_DOMAIN/token" '.authorization_endpoint == $endpoint and .token_endpoint == $token' >/dev/null
+          echo "$OAUTH_META" | jq -e --arg endpoint "https://$HUB_DOMAIN/authorize" --arg token "https://$HUB_DOMAIN/token" --arg reg "https://$HUB_DOMAIN/register" '.authorization_endpoint == $endpoint and .token_endpoint == $token and .registration_endpoint == $reg' >/dev/null
           RESOURCE_META=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/.well-known/oauth-protected-resource")
           echo "$RESOURCE_META" | jq -e --arg resource "https://$HUB_DOMAIN/mcp" --arg issuer "https://$HUB_DOMAIN" '.resource == $resource and (.authorization_servers | index($issuer) != null)' >/dev/null
+          DCR=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/register" -H 'Content-Type: application/json' --data '{"client_name":"hub-smoke-dcr","redirect_uris":["https://example.com/callback"],"token_endpoint_auth_method":"none"}')
+          echo "$DCR" | jq -e '.client_id | startswith("dcr_")' >/dev/null
           TOOLS=$(curl --fail --silent --show-error -X POST "https://$HUB_DOMAIN/mcp" -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}')
-          echo "$TOOLS" | grep -q 'list_runners'
+          echo "$TOOLS" | jq -e '(.result.tools | length) >= 16' >/dev/null
           ADMIN=$(curl --fail --silent --show-error "https://$HUB_DOMAIN/admin/runners" -H "Authorization: Bearer $ADMIN_TOKEN")
           echo "Admin runner registry: $ADMIN"
           echo "Hub endpoint smoke tests passed: https://$HUB_DOMAIN/mcp"

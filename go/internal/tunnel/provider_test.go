@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 )
-func TestTailscaleUsesExistingCLIAndResetsServe(t *testing.T){d:=t.TempDir();logPath:=filepath.Join(d,"calls");script:=filepath.Join(d,"tailscale");body:=fmt.Sprintf(`#!/bin/sh
+func TestTailscaleUsesExistingCLIAndResetsServe(t *testing.T){if runtime.GOOS=="windows"{t.Skip("uses a POSIX shell fake executable")};d:=t.TempDir();logPath:=filepath.Join(d,"calls");script:=filepath.Join(d,"tailscale");body:=fmt.Sprintf(`#!/bin/sh
 echo "$@" >> '%s'
 if [ "$1" = serve ] && [ "$2" = --help ]; then echo --bg; fi
 if [ "$1" = status ] && [ "$2" = --json ]; then echo '{"Self":{"DNSName":"mcp.tailnet.ts.net."}}'; fi

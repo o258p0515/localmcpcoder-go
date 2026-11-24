@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestCloudflareCreateTunnelAndDNS(t *testing.T){var created,configured,dnsCr
 func TestCloudflareReuseTunnelAndDNSUpdate(t *testing.T){var tokenFetched,dnsUpdated bool;ts:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.Header().Set("Content-Type","application/json");var result any=map[string]any{};switch{case r.URL.Path=="/zones":result=[]any{map[string]any{"id":"z","account":map[string]any{"id":"a"}}};case strings.Contains(r.URL.Path,"/cfd_tunnel")&&r.URL.Query().Get("name")!="":result=[]any{map[string]any{"id":"existing"}};case strings.HasSuffix(r.URL.Path,"/existing/token"):tokenFetched=true;result="existing-token";case strings.Contains(r.URL.Path,"/configurations"):result=map[string]any{};case strings.Contains(r.URL.Path,"dns_records")&&r.Method=="GET":result=[]any{map[string]any{"id":"dns1"}};case strings.Contains(r.URL.Path,"dns_records")&&r.Method=="PUT":dnsUpdated=true;result=map[string]any{};default:t.Errorf("unexpected %s %s",r.Method,r.URL.String());w.WriteHeader(404);return};_=json.NewEncoder(w).Encode(map[string]any{"success":true,"result":result})}));defer ts.Close();c:=cfClient{token:"test",client:ts.Client(),baseURL:ts.URL};tok,e:=configureNamedTunnel(context.Background(),c,"mcp.example.com",8787);if e!=nil{t.Fatal(e)};if tok!="existing-token"||!tokenFetched||!dnsUpdated{t.Fatalf("reuse path incomplete: %s %v %v",tok,tokenFetched,dnsUpdated)}}
 func TestCloudflareScopeErrorIsActionable(t *testing.T){ts:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.WriteHeader(403);_=json.NewEncoder(w).Encode(map[string]any{"success":false,"errors":[]any{map[string]any{"message":"permission denied"}}})}));defer ts.Close();c:=cfClient{client:ts.Client(),baseURL:ts.URL};e:=c.call(context.Background(),"GET","/zones",nil,nil);if e==nil||!strings.Contains(e.Error(),"Zone:DNS:Edit"){t.Fatalf("missing scope guidance: %v",e)}}
 func TestWaitReadyHonorsContext(t *testing.T){ctx,cancel:=context.WithTimeout(context.Background(),20*time.Millisecond);defer cancel();if e:=waitReady(ctx,"http://127.0.0.1:1");e==nil{t.Fatal("expected context timeout")}}
-func TestCloudflareTokenModeSkipsAPIAndKeepsTokenOutOfArgv(t *testing.T){d:=t.TempDir();argsPath,tokenPath:=filepath.Join(d,"args"),filepath.Join(d,"token");bin:=filepath.Join(d,"cloudflared");script:=fmt.Sprintf(`#!/bin/sh
+func TestCloudflareTokenModeSkipsAPIAndKeepsTokenOutOfArgv(t *testing.T){if runtime.GOOS=="windows"{t.Skip("uses a POSIX shell fake executable")};d:=t.TempDir();argsPath,tokenPath:=filepath.Join(d,"args"),filepath.Join(d,"token");bin:=filepath.Join(d,"cloudflared");script:=fmt.Sprintf(`#!/bin/sh
 printf '%%s' "$@" > '%s'
 printf '%%s' "$TUNNEL_TOKEN" > '%s'
 exec sleep 30

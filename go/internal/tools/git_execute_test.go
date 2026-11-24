@@ -206,3 +206,28 @@ func TestGitSafeEnvRemovesDedicatedExecutorToken(t *testing.T) {
 		t.Fatalf("required process environment was removed: %q", joined)
 	}
 }
+
+func TestGitSubcommandsWorkWhenInheritedCwdIsInaccessible(t *testing.T) {
+	oldwd, err := os.Getwd()
+	if err != nil { t.Fatal(err) }
+	defer func() { _ = os.Chdir(oldwd) }
+
+	base := t.TempDir()
+	gitDir := filepath.Join(base, "private.git")
+	init := exec.Command("git", "init", "--bare", gitDir)
+	if out, err := init.CombinedOutput(); err != nil { t.Fatalf("init bare repo: %v: %s", err, out) }
+	workTree := filepath.Join(base, "work")
+	if err := os.Mkdir(workTree, 0700); err != nil { t.Fatal(err) }
+	remote := exec.Command("git", "--git-dir="+gitDir, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	if out, err := remote.CombinedOutput(); err != nil { t.Fatalf("add remote: %v: %s", err, out) }
+
+	badCwd := filepath.Join(base, "removed-cwd")
+	if err := os.Mkdir(badCwd, 0700); err != nil { t.Fatal(err) }
+	if err := os.Chdir(badCwd); err != nil { t.Fatal(err) }
+	if err := os.Remove(badCwd); err != nil { t.Fatal(err) }
+
+	if !validBranchRef("main") { t.Fatal("branch validation failed with inaccessible inherited cwd") }
+	if !validGitHubRemote(gitDir, workTree, false) { t.Fatal("remote validation failed with inaccessible inherited cwd") }
+	got, err := runSimpleGit(context.Background(), gitDir, "", os.TempDir(), "rev-parse", "--is-bare-repository")
+	if err != nil || strings.TrimSpace(got) != "true" { t.Fatalf("runSimpleGit failed: output=%q err=%v", got, err) }
+}

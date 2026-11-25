@@ -25,6 +25,8 @@ on:
         options:
           - ubuntu-latest
           - windows-latest
+          - linux
+          - windows
 permissions:
   contents: read
 concurrency:
@@ -33,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   runner:
-    runs-on: ${{ inputs.runner_os || 'ubuntu-latest' }}
+    runs-on: ${{ (inputs.runner_os == 'windows' || inputs.runner_os == 'windows-latest') && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
@@ -62,7 +64,7 @@ jobs:
       - name: Build and test Go runner
         working-directory: go
         env:
-          BINARY_EXT: ${{ inputs.runner_os == 'windows-latest' && '.exe' || '' }}
+          BINARY_EXT: ${{ (inputs.runner_os == 'windows' || inputs.runner_os == 'windows-latest') && '.exe' || '' }}
           RUNNER_OS: ${{ runner.os }}
         shell: bash
         run: |
@@ -86,7 +88,7 @@ jobs:
           LOCALMCP_RUNNER_TAGS: ${{ inputs.runner_tags }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          BINARY_EXT: ${{ inputs.runner_os == 'windows-latest' && '.exe' || '' }}
+          BINARY_EXT: ${{ (inputs.runner_os == 'windows' || inputs.runner_os == 'windows-latest') && '.exe' || '' }}
         shell: bash
         run: |
           set -euo pipefail

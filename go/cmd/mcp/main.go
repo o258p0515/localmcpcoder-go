@@ -42,7 +42,7 @@ func main() {
 	if mode=="hub" || cfg.HubURLs!="" {
 		var stopTailscale func()error
 		if os.Getenv("TS_TRUST_CREDS")!=""||os.Getenv("TS_AUTHKEY")!=""{
-			tsPublic,tsStop,tsErr:=(tunnel.Tailscale{}).Start(ctx,tunnel.Config{Port:cfg.Port,TSHostname:cfg.TSHostname,TSMode:"serve",TSTag:cfg.TSTag},addr)
+			tsPublic,tsStop,tsErr:=(tunnel.Tailscale{}).Start(ctx,tunnel.Config{Port:cfg.Port,TSHostname:cfg.TSHostname,TSMode:"up",TSTag:cfg.TSTag},addr)
 			if tsErr!=nil{_=httpSrv.Close();log.Fatalf("Tailscale setup failed: %v",tsErr)}
 			stopTailscale=tsStop;log.Printf("Tailscale node joined; private endpoint: %s",tsPublic)
 		}
@@ -78,7 +78,7 @@ func main() {
 	if e!=nil{_=httpSrv.Close();log.Fatal(e)}
 	var stopTailscale func()error
 	if mode!="tailscale"&&os.Getenv("TS_TRUST_CREDS")!=""{
-		tsPublic,tsStop,tsErr:=(tunnel.Tailscale{}).Start(ctx,tunnel.Config{Port:cfg.Port,TSHostname:cfg.TSHostname,TSMode:"serve",TSTag:cfg.TSTag},addr)
+		tsPublic,tsStop,tsErr:=(tunnel.Tailscale{}).Start(ctx,tunnel.Config{Port:cfg.Port,TSHostname:cfg.TSHostname,TSMode:"up",TSTag:cfg.TSTag},addr)
 		if tsErr!=nil{if stopTunnel!=nil{_=stopTunnel()};_=httpSrv.Close();log.Fatalf("Tailscale setup failed: %v",tsErr)}
 		stopTailscale=tsStop;log.Printf("Tailscale node joined; private endpoint: %s",tsPublic)
 	}

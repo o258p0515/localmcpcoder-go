@@ -28,3 +28,43 @@ echo "$@" > '`+daemonArgs+`'
 for arg in "$@"; do case "$arg" in --socket=*) touch "${arg#--socket=}";; esac; done
 exec sleep 60
 `;if e:=os.WriteFile(daemon,[]byte(daemonScript),0755);e!=nil{t.Fatal(e)};t.Setenv("TAILSCALE_BIN",cli);t.Setenv("TAILSCALED_BIN",daemon);t.Setenv("TS_AUTHKEY","test-auth-key");u,stop,e:=(Tailscale{}).Start(context.Background(),Config{Port:8787,TSMode:"serve",TSHostname:"test-host"},"127.0.0.1:8787");if e!=nil{t.Fatal(e)};if u!="https://ephemeral.tailnet.ts.net"{t.Fatalf("unexpected url %s",u)};if e=stop();e!=nil{t.Fatal(e)};cb,_:=os.ReadFile(calls);if !strings.Contains(string(cb),"up --auth-key=test-auth-key --hostname=test-host")||!strings.Contains(string(cb),"serve --bg 8787")||!strings.Contains(string(cb),"serve reset")||!strings.Contains(string(cb),"logout"){t.Fatalf("missing daemon-backed CLI calls: %s",cb)};db,_:=os.ReadFile(daemonArgs);for _,arg:=range []string{"--tun=userspace-networking","--state=mem:","--socket="}{if !strings.Contains(string(db),arg){t.Fatalf("missing %s in daemon args: %s",arg,db)}}}
+
+func TestTailscaleUpModeSkipsServe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell fake executable")
+	}
+	d := t.TempDir()
+	logPath := filepath.Join(d, "calls")
+	state := filepath.Join(d, "authenticated")
+	script := filepath.Join(d, "tailscale")
+	body := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> '%s'
+if [ "$1" = up ]; then touch '%s'; fi
+if [ "$1" = status ] && [ "$2" = --json ]; then
+  if [ -f '%s' ]; then echo '{"Self":{"DNSName":"hub-node.tailnet.ts.net."}}'; else echo '{"Self":{}}'; fi
+fi
+`, logPath, state, state)
+	if e := os.WriteFile(script, []byte(body), 0755); e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("TAILSCALE_BIN", script)
+	t.Setenv("TS_AUTHKEY", "test-auth-key")
+	u, stop, e := (Tailscale{}).Start(context.Background(), Config{Port: 8787, TSMode: "up", TSHostname: "hub-node"}, "127.0.0.1:8787")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if u != "https://hub-node.tailnet.ts.net" {
+		t.Fatalf("unexpected url %s", u)
+	}
+	if e = stop(); e != nil {
+		t.Fatal(e)
+	}
+	b, _ := os.ReadFile(logPath)
+	calls := string(b)
+	if !strings.Contains(calls, "up --auth-key=test-auth-key --hostname=hub-node") {
+		t.Fatalf("expected tailscale up call, got: %s", calls)
+	}
+	if strings.Contains(calls, "serve") || strings.Contains(calls, "funnel") {
+		t.Fatalf("did not expect serve or funnel in up mode, got: %s", calls)
+	}
+}

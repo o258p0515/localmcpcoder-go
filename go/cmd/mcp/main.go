@@ -40,8 +40,14 @@ func main() {
 
 	mode:=cfg.Tunnel
 	if mode=="hub" || cfg.HubURLs!="" {
+		var stopTailscale func()error
+		if os.Getenv("TS_TRUST_CREDS")!=""||os.Getenv("TS_AUTHKEY")!=""{
+			tsPublic,tsStop,tsErr:=(tunnel.Tailscale{}).Start(ctx,tunnel.Config{Port:cfg.Port,TSHostname:cfg.TSHostname,TSMode:"serve",TSTag:cfg.TSTag},addr)
+			if tsErr!=nil{_=httpSrv.Close();log.Fatalf("Tailscale setup failed: %v",tsErr)}
+			stopTailscale=tsStop;log.Printf("Tailscale node joined; private endpoint: %s",tsPublic)
+		}
 		hub, e := hubclient.New(hubclient.Config{HubURLs:cfg.HubURLs,Token:cfg.Token,RunnerID:cfg.RunnerID,RunnerTags:cfg.RunnerTags,Port:cfg.Port})
-		if e!=nil{_=httpSrv.Close();log.Fatal(e)}
+		if e!=nil{if stopTailscale!=nil{_=stopTailscale()};_=httpSrv.Close();log.Fatal(e)}
 		hubCtx,cancelHub:=context.WithCancel(context.Background())
 		hubDone:=make(chan error,1)
 		go func(){hubDone<-hub.Run(hubCtx)}()
@@ -59,6 +65,7 @@ func main() {
 		}
 		cancelHub()
 		select{case <-hubDone:case <-time.After(2*time.Second):}
+		if stopTailscale!=nil{if te:=stopTailscale();te!=nil{log.Printf("stop Tailscale: %v",te)}}
 		shutdown,cancel:=context.WithTimeout(context.Background(),10*time.Second);defer cancel();_=httpSrv.Shutdown(shutdown)
 		return
 	}

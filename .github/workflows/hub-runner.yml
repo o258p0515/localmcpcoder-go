@@ -79,6 +79,9 @@ jobs:
         env:
           HUB_URLS: ${{ secrets.HUB_URLS }}
           MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          TS_TRUST_CREDS: ${{ secrets.TS_TRUST_CREDS }}
+          TS_TAGS: ${{ secrets.TS_TAGS }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
           LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name }}
           LOCALMCP_RUNNER_TAGS: ${{ inputs.runner_tags }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}

@@ -27,6 +27,11 @@ on:
           - windows-latest
           - linux
           - windows
+      account_alias:
+        description: "RTDB account alias"
+        type: string
+        required: false
+        default: "personal"
 permissions:
   contents: read
 concurrency:

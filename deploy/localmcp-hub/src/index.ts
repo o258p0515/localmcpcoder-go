@@ -82,7 +82,7 @@ export default {
       if (!staticAuth && !oauthAuth) return withCors(new Response("unauthorized", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="localmcp-hub", resource_metadata="' + url.origin + '/.well-known/oauth-protected-resource"' } }));
       if (!request.headers.get("Content-Type")?.includes("application/json")) return withCors(new Response("application/json required", { status: 415 }));
       const supplied = request.headers.get("Mcp-Session-Id") ?? request.headers.get("X-Session-Id");
-      const session = supplied && /^[a-zA-Z0-9._:-]{1,128}$/.test(supplied) ? supplied : crypto.randomUUID();
+      const session = supplied && /^[a-zA-Z0-9._:-]{1,128}$/.test(supplied) ? supplied : "default";
       return withCors(await handleMcp(request, env, session));
     }
     return withCors(new Response("not found", { status: 404 }));

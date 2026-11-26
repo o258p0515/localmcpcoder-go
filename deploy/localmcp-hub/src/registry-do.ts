@@ -69,7 +69,12 @@ export class RegistryDO {
   }
   private getSessionRunner(key: string): string | null {
     const row = this.state.storage.sql.exec<any>("SELECT runner_id FROM session_targets WHERE session_key=?", key).toArray()[0];
-    return row?.runner_id ?? null;
+    if (row?.runner_id) return row.runner_id;
+    if (key !== "default") {
+      const fallback = this.state.storage.sql.exec<any>("SELECT runner_id FROM session_targets WHERE session_key=?", "default").toArray()[0];
+      return fallback?.runner_id ?? null;
+    }
+    return null;
   }
   private setSessionRunner(key: string, id: string): { session_key: string; runner_id: string } {
     const runner = this.getRunner(id);
@@ -141,4 +146,3 @@ export class RegistryDO {
       status: row.status === "draining" ? "draining" : "online", connected_at: Number(row.connected_at) };
   }
 }
-  144

@@ -46,7 +46,7 @@ func main() {
 			if tsErr!=nil{_=httpSrv.Close();log.Fatalf("Tailscale setup failed: %v",tsErr)}
 			stopTailscale=tsStop;log.Printf("Tailscale node joined; private endpoint: %s",tsPublic)
 		}
-		hub, e := hubclient.New(hubclient.Config{HubURLs:cfg.HubURLs,Token:cfg.Token,RunnerID:cfg.RunnerID,RunnerTags:cfg.RunnerTags,Port:cfg.Port})
+		hub, e := hubclient.New(hubclient.Config{HubURLs:cfg.HubURLs,Token:cfg.Token,RunnerID:cfg.RunnerID,RunnerTags:cfg.RunnerTags,ToolProfile:cfg.ToolProfile,Port:cfg.Port})
 		if e!=nil{if stopTailscale!=nil{_=stopTailscale()};_=httpSrv.Close();log.Fatal(e)}
 		hubCtx,cancelHub:=context.WithCancel(context.Background())
 		hubDone:=make(chan error,1)

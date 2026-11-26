@@ -11,7 +11,7 @@ on:
         description: "Comma-separated runner tags (for example windows,go,gha)"
         type: string
         required: false
-        default: "linux,go,gha"
+        default: "linux,go,gha,agent"
       duration_seconds:
         description: "Runner lifetime in seconds (maximum 20400 / 5h40m)"
         type: number

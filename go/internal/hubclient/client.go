@@ -19,7 +19,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-type Config struct { HubURLs string; Token string; RunnerID string; RunnerTags string; Port int; Repo string }
+type Config struct { HubURLs string; Token string; RunnerID string; RunnerTags string; ToolProfile string; Port int; Repo string }
 type Client struct { cfg Config; http *http.Client; mu sync.Mutex; connections map[*connection]struct{}; draining bool; active int; cond *sync.Cond }
 type connection struct { ws *websocket.Conn; writeMu sync.Mutex }
 type frame struct { Type string `json:"type"`; ReqID string `json:"req_id,omitempty"`; Payload json.RawMessage `json:"payload,omitempty"` }
@@ -30,6 +30,7 @@ func New(cfg Config) (*Client,error) {
 	if cfg.Port==0 { cfg.Port=8787 }
 	if cfg.RunnerID=="" { cfg.RunnerID=defaultRunnerID() } else { cfg.RunnerID=sanitizeRunnerID(cfg.RunnerID) }
 	if cfg.Repo=="" { cfg.Repo=os.Getenv("GITHUB_REPOSITORY") }
+	cfg.RunnerTags=ensureRoleTag(cfg.RunnerTags,cfg.ToolProfile)
 	urls:=splitURLs(cfg.HubURLs);if len(urls)==0{return nil,fmt.Errorf("no valid Hub URL configured")}
 	for _,raw:=range urls{u,err:=url.Parse(raw);if err!=nil{return nil,fmt.Errorf("invalid Hub URL %q: %w",raw,err)};if u.Host==""||(u.Scheme!="https"&&u.Scheme!="http"&&u.Scheme!="wss"&&u.Scheme!="ws"){return nil,fmt.Errorf("Hub URL must use http(s) or ws(s) and include a hostname: %q",raw)}}
 	c:=&Client{cfg:cfg,http:&http.Client{Timeout:24*time.Hour},connections:make(map[*connection]struct{})};c.cond=sync.NewCond(&c.mu);return c,nil
@@ -84,3 +85,24 @@ func sanitizeHost(host string)string{return strings.Trim(host,"-.")}
 func nextBackoff(d time.Duration)time.Duration{d*=2;if d>30*time.Second{return 30*time.Second};return d}
 func jitter(d time.Duration)time.Duration{return time.Duration(float64(d)*(0.8+mrand.Float64()*0.4))}
 func sleepContext(ctx context.Context,d time.Duration)bool{t:=time.NewTimer(d);defer t.Stop();select{case <-ctx.Done():return false;case <-t.C:return true}}
+
+func ensureRoleTag(tags, profile string) string {
+	var out []string
+	seen := map[string]bool{}
+	hasGit := false
+	for _, part := range strings.Split(tags, ",") {
+		t := strings.TrimSpace(part)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		if t == "git" {
+			hasGit = true
+		}
+		out = append(out, t)
+	}
+	if profile != "git-executor" && !hasGit && !seen["agent"] {
+		out = append(out, "agent")
+	}
+	return strings.Join(out, ",")
+}

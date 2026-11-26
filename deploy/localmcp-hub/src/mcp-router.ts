@@ -164,18 +164,30 @@ async function resolveRunner(env: Env, session: string, headerId: string, argume
   // Each Agent/Git pair shares a stable pair:<id> tag. A session pinned to
   // either half routes the opposite tool role to that exact peer. Legacy
   // unpaired deployments remain supported only while the opposite role is unique.
+  const summarizeRunners = (list: RunnerInfo[]) =>
+    list.map((r) => `${r.runner_id} (${r.os}/${r.arch})`).join(", ");
+
   if (toolName === "git_execute") {
     if (hasTag(selected, "git") && hasTag(selected, "isolated")) return { runner: selected, runners };
     if (hasTag(selected, "agent")) {
+      if (gitRunners.length === 0) {
+        return {
+          runners,
+          error: `No online isolated Git executor runner (tagged git,isolated). Start git-executor-runner.yml or run git via bash on an Agent runner. Online runners: ${summarizeRunners(online) || "none"}.`
+        };
+      }
       const peer = paired(selected!, gitRunners);
       if (peer) return { runner: peer, runners };
       return { runners, error: pairTag(selected)
-        ? "The isolated Git runner paired with this Agent is not online or the pair tag is ambiguous."
-        : "Multiple isolated Git runners are online. Pair tags are required or pass runner_id." };
+        ? `The isolated Git runner paired with ${selected!.runner_id} is not online or the pair tag is ambiguous.`
+        : `Multiple isolated Git runners are online (${summarizeRunners(gitRunners)}). Pair tags are required or pass runner_id.` };
     }
     if (gitRunners.length === 1) return { runner: gitRunners[0], runners };
-    if (gitRunners.length > 1) return { runners, error: "Multiple isolated Git runners are online. Select an Agent runner with a matching pair tag or pass runner_id." };
-    return { runners, error: "No online isolated Git executor runner. Start a runner tagged git,isolated, then call list_runners." };
+    if (gitRunners.length > 1) return { runners, error: `Multiple isolated Git runners are online (${summarizeRunners(gitRunners)}). Select an Agent runner with a matching pair tag or pass runner_id.` };
+    return {
+      runners,
+      error: `No online isolated Git executor runner (tagged git,isolated). Start git-executor-runner.yml or run git via bash on an Agent runner. Online runners: ${summarizeRunners(online) || "none"}.`
+    };
   }
 
   if (hasTag(selected, "agent")) return { runner: selected, runners };
@@ -184,14 +196,22 @@ async function resolveRunner(env: Env, session: string, headerId: string, argume
     if (peer) return { runner: peer, runners };
     return { runners, error: pairTag(selected)
       ? "The Agent runner paired with this Git executor is not online or the pair tag is ambiguous."
-      : "Multiple Agent runners are online. Pair tags are required or pass runner_id." };
+      : `Multiple Agent runners are online (${summarizeRunners(agentRunners)}). Pair tags are required or pass runner_id.` };
   }
   if (agentRunners.length === 1) return { runner: agentRunners[0], runners };
-  if (agentRunners.length > 1) return { runners, error: "Multiple Agent runners are online. Select a Git runner with a matching pair tag or pass runner_id." };
+  if (agentRunners.length > 1) {
+    return {
+      runners,
+      error: `Multiple Agent runners are online (${summarizeRunners(agentRunners)}). Call select_runner with runner_id or pass runner_id explicitly.`
+    };
+  }
   if (selected && !hasTag(selected, "git")) return { runner: selected, runners };
   if (online.length === 1 && !hasTag(online[0], "git")) return { runner: online[0], runners };
   if (online.length === 0) return { runners, error: "No online runner. Start a LocalMCP Hub runner, then call list_runners." };
-  return { runners, error: "No online Agent runner. Start a runner tagged agent, then call list_runners." };
+  return {
+    runners,
+    error: `No online Agent runner (tagged agent). Online runners: ${summarizeRunners(online)}. Pass runner_id explicitly or start a runner tagged agent.`
+  };
 }
 
 async function processRequest(request: Request, env: Env, session: string, rpc: any): Promise<any> {
@@ -285,4 +305,3 @@ export async function handleMcp(request: Request, env: Env, session: string): Pr
   try { return Response.json(await result, { headers }); }
   catch (e) { return Response.json(error(rpc.id, -32603, e instanceof Error ? e.message : String(e)), { headers }); }
 }
-  288

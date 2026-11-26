@@ -236,5 +236,41 @@ describe("MCP Hub routing", () => {
     expect(runnerCalls[0].body.async).toBe(true);
     expect(runnerCalls[0].body.payload.params.arguments).toEqual({ command: "pwd" });
   });
+
+  it("persists default session selection when Mcp-Session-Id header is omitted", async () => {
+    const { env, runnerCalls } = fakeEnv({
+      runners: [
+        { runner_id: "agent-1", os: "linux", arch: "amd64", tags: ["linux", "agent"], status: "online" },
+        { runner_id: "agent-2", os: "windows", arch: "amd64", tags: ["windows", "agent"], status: "online" }
+      ]
+    });
+    const statelessReq = (rpc: any) => new Request("https://hub.example.com/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rpc)
+    });
+    const before = await handleMcp(statelessReq({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "bash", arguments: { command: "id" } } }), env, "default");
+    const beforeBody = await before.json() as any;
+    expect(beforeBody.result.isError).toBe(true);
+    expect(beforeBody.result.content[0].text).toContain("agent-1 (linux/amd64)");
+
+    await handleMcp(statelessReq({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "select_runner", arguments: { runner_id: "agent-2" } } }), env, "default");
+    await handleMcp(statelessReq({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "bash", arguments: { command: "id" } } }), env, "default");
+    const calls = runnerCalls.filter((c) => c.body.payload?.method === "tools/call");
+    expect(calls.map((c) => c.runnerId)).toEqual(["agent-2"]);
+  });
+
+  it("returns actionable error when git_execute is called with only agent runners online", async () => {
+    const { env } = fakeEnv({
+      runners: [
+        { runner_id: "agent-1", os: "linux", arch: "amd64", tags: ["linux", "agent"], status: "online" }
+      ]
+    });
+    await handleMcp(request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "select_runner", arguments: { runner_id: "agent-1" } } }), env, "session-1");
+    const res = await handleMcp(request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "git_execute", arguments: { operation: "status", account: "personal" } } }), env, "session-1");
+    const body = await res.json() as any;
+    expect(body.result.isError).toBe(true);
+    expect(body.result.content[0].text).toContain("No online isolated Git executor runner");
+    expect(body.result.content[0].text).toContain("agent-1 (linux/amd64)");
+  });
 });
-  240

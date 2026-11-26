@@ -17,6 +17,7 @@ type Config struct {
 	Root             string
 	Port             int
 	Token            string
+	ShutdownToken    string
 	Shell            string
 	MaxOutput        int
 	AllowOutsideRoot bool
@@ -71,7 +72,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return c, err
 	}
-	c = Config{Root: abs, Port: *port, Shell: *shell, MaxOutput: *max, AllowOutsideRoot: *outside, Tunnel: *tunnel, Host: *host, SkillsDir: *skills, TSHostname: *tsHost, TSMode: *tsMode, TSTag: *tsTag, HubURLs: *hubURLs, RunnerID: *runnerID, RunnerTags: *runnerTags, ToolProfile: *toolProfile, GitCredentialURL: env("GIT_CREDENTIAL_URL", ""), Token: os.Getenv("MCP_TOKEN")}
+	c = Config{Root: abs, Port: *port, Shell: *shell, MaxOutput: *max, AllowOutsideRoot: *outside, Tunnel: *tunnel, Host: *host, SkillsDir: *skills, TSHostname: *tsHost, TSMode: *tsMode, TSTag: *tsTag, HubURLs: *hubURLs, RunnerID: *runnerID, RunnerTags: *runnerTags, ToolProfile: *toolProfile, GitCredentialURL: env("GIT_CREDENTIAL_URL", ""), Token: os.Getenv("MCP_TOKEN"), ShutdownToken: os.Getenv("MCP_SHUTDOWN_TOKEN")}
 	if c.HubURLs != "" {
 		c.Tunnel = "hub"
 	}

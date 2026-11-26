@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"github.com/o258p0515/localmcpcoder-go/go/internal/config"
 	"github.com/o258p0515/localmcpcoder-go/go/internal/fsx"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -33,7 +35,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM)
 	defer stop()
 	addr:=fmt.Sprintf("127.0.0.1:%d",cfg.Port)
-	httpSrv:=&http.Server{Addr:addr,Handler:srv.Handler(),ReadHeaderTimeout:10*time.Second}
+	shutdownRequested := make(chan struct{}, 1)
+	handler := withInternalShutdown(srv.Handler(), cfg.ShutdownToken, shutdownRequested)
+	httpSrv:=&http.Server{Addr:addr,Handler:handler,ReadHeaderTimeout:10*time.Second}
+	go func() { select { case <-shutdownRequested: stop(); case <-ctx.Done(): } }()
 	errCh:=make(chan error,1)
 	go func(){errCh<-httpSrv.ListenAndServe()}()
 	if err=waitLocal(ctx,addr);err!=nil{_=httpSrv.Close();log.Fatal(err)}
@@ -88,6 +93,35 @@ func main() {
 	if stopTailscale!=nil{if te:=stopTailscale();te!=nil{log.Printf("stop Tailscale: %v",te)}}
 	if stopTunnel!=nil{if te:=stopTunnel();te!=nil{log.Printf("stop tunnel: %v",te)}}
 	shutdown,cancel:=context.WithTimeout(context.Background(),10*time.Second);defer cancel();_=httpSrv.Shutdown(shutdown)
+}
+
+// withInternalShutdown exposes a loopback-only, token-protected graceful shutdown
+// hook for hosted runners. It never returns or logs the bearer token.
+func withInternalShutdown(next http.Handler, token string, shutdown chan<- struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/shutdown" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+		bearer := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+		if token == "" || subtle.ConstantTimeCompare([]byte(bearer), []byte(token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		select {
+		case shutdown <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, "{\"status\":\"shutting_down\"}\n")
+	})
 }
 
 func waitLocal(ctx context.Context,addr string)error{

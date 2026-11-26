@@ -260,6 +260,19 @@ describe("MCP Hub routing", () => {
     expect(calls.map((c) => c.runnerId)).toEqual(["agent-2"]);
   });
 
+  it("prefers an explicitly selected non-git runner over an unrelated single agent-tagged runner", async () => {
+    const { env, runnerCalls } = fakeEnv({
+      runners: [
+        { runner_id: "agent-linux", os: "linux", arch: "amd64", tags: ["linux", "agent"], status: "online" },
+        { runner_id: "legacy-win", os: "windows", arch: "amd64", tags: ["go", "gha"], status: "online" }
+      ]
+    });
+    await handleMcp(request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "select_runner", arguments: { runner_id: "legacy-win" } } }), env, "session-1");
+    await handleMcp(request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "system_info", arguments: {} } }), env, "session-1");
+    const calls = runnerCalls.filter((c) => c.body.payload?.method === "tools/call");
+    expect(calls.map((c) => c.runnerId)).toEqual(["legacy-win"]);
+  });
+
   it("returns actionable error when git_execute is called with only agent runners online", async () => {
     const { env } = fakeEnv({
       runners: [

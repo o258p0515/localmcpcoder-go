@@ -198,6 +198,7 @@ async function resolveRunner(env: Env, session: string, headerId: string, argume
       ? "The Agent runner paired with this Git executor is not online or the pair tag is ambiguous."
       : `Multiple Agent runners are online (${summarizeRunners(agentRunners)}). Pair tags are required or pass runner_id.` };
   }
+  if (selected && !hasTag(selected, "git")) return { runner: selected, runners };
   if (agentRunners.length === 1) return { runner: agentRunners[0], runners };
   if (agentRunners.length > 1) {
     return {

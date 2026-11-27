@@ -7,6 +7,7 @@ export interface Env {
   HANDOVER_WEBHOOK_URL?: string;
   HANDOVER_WEBHOOK_TOKEN?: string;
   HANDOVER_MAX_GENERATIONS?: string;
+  MCP_PROXY?: Fetcher;
   REGISTRY_DO: DurableObjectNamespace;
   RUNNER_DO: DurableObjectNamespace;
 }

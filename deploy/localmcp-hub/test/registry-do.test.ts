@@ -337,4 +337,45 @@ describe("RegistryDO", () => {
     const runner = (await (await action(registry, { action: "getRunner", runner_id: "gha-g1" })).json() as any).result;
     expect(runner).toMatchObject({ handover_state: "spawning", successor_id: "gha-g2" });
   });
+
+  it("routes handover internally via Cloudflare Service Binding MCP_PROXY using MCP_TOKEN with zero extra config", async () => {
+    const proxyCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const proxyFetcher = {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        proxyCalls.push({ url: String(input), init });
+        return Response.json({ dispatched: true, runner_id: "gha-g2" }, { status: 200 });
+      }
+    } as unknown as Fetcher;
+
+    const { registry } = makeRegistry({ MCP_PROXY: proxyFetcher });
+    await action(registry, {
+      action: "register",
+      runner_id: "gha-g1",
+      os: "linux",
+      arch: "amd64",
+      repo: "o258p0515/localmcpcoder-go",
+      tags: ["provider:github", "account:personal", "pair:p1", "agent"],
+      duration_seconds: 3600
+    });
+
+    const res = await action(registry, { action: "requestHandover", runner_id: "gha-g1", reason: "quota_expiring" });
+    const body = (await res.json() as any).result;
+    expect(body).toMatchObject({
+      accepted: true,
+      handover_state: "spawning",
+      transport: "service_binding",
+      successor_id: "gha-g2"
+    });
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]!.url).toBe("https://github-mcp-proxy/internal/hub/handover");
+    expect((proxyCalls[0]!.init?.headers as Record<string, string>).Authorization).toBe("Bearer test-mcp-token-0123456789abcdef");
+    const sent = JSON.parse(String(proxyCalls[0]!.init?.body));
+    expect(sent).toMatchObject({
+      predecessor_id: "gha-g1",
+      provider: "github",
+      account: "personal",
+      generation: 2
+    });
+    expect(sent.tags).toContain("pair:p1");
+  });
 });

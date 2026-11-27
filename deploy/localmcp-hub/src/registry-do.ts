@@ -216,7 +216,8 @@ export class RegistryDO {
     }
 
     const webhookUrl = String(this.env.HANDOVER_WEBHOOK_URL ?? "").trim();
-    if (!webhookUrl) {
+    const proxyService = this.env.MCP_PROXY;
+    if (!webhookUrl && !proxyService) {
       this.state.storage.sql.exec("UPDATE runners SET handover_state='requested' WHERE runner_id=?", runnerId);
       return { accepted: true, runner_id: runnerId, handover_state: "requested", webhook_configured: false, next_generation: generation + 1 };
     }
@@ -240,14 +241,18 @@ export class RegistryDO {
     };
 
     try {
-      const response = await fetch(webhookUrl, {
+      const requestInit: RequestInit = {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(webhookToken ? { Authorization: "Bearer " + webhookToken } : {})
         },
         body: JSON.stringify(payload)
-      });
+      };
+      const transport = webhookUrl ? "webhook" : "service_binding";
+      const response = webhookUrl
+        ? await fetch(webhookUrl, requestInit)
+        : await proxyService!.fetch("https://github-mcp-proxy/internal/hub/handover", requestInit);
       const body = await response.json().catch(() => ({})) as Record<string, unknown>;
       if (!response.ok) {
         this.state.storage.sql.exec("UPDATE runners SET handover_state='failed' WHERE runner_id=?", runnerId);
@@ -255,13 +260,14 @@ export class RegistryDO {
           accepted: false,
           reason: "spawn_failed",
           runner_id: runnerId,
+          transport,
           status: response.status,
-          error: String(body.error ?? `handover webhook returned HTTP ${response.status}`)
+          error: String(body.error ?? `handover ${transport} returned HTTP ${response.status}`)
         };
       }
       if (body.skipped === true) {
         this.state.storage.sql.exec("UPDATE runners SET handover_state='none' WHERE runner_id=?", runnerId);
-        return { accepted: false, runner_id: runnerId, ...body };
+        return { accepted: false, runner_id: runnerId, transport, ...body };
       }
       const successorId = typeof body.runner_id === "string" ? body.runner_id : "";
       if (successorId) {
@@ -271,6 +277,7 @@ export class RegistryDO {
         accepted: true,
         runner_id: runnerId,
         handover_state: "spawning",
+        transport,
         next_generation: nextGeneration,
         successor_id: successorId || null,
         spawn: body

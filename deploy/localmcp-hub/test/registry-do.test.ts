@@ -390,7 +390,36 @@ describe("RegistryDO", () => {
     expect(disabledRunner.handover_after).toBe(-1);
   });
 
-  it("skips alarm handover and marks skipped_idle when runner has no recent activity", async () => {
+  it("triggers alarm handover even when idle if idle_timeout is 0 (always-on)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ dispatched: true, runner_id: "always-on-g2" }), { status: 200 })
+    );
+    const base = Date.now();
+    const { registry, sql } = makeRegistry(
+      { HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" },
+      { "always-on-g1": { has_activity: false, last_activity_at: null, active_requests: 0 } }
+    );
+
+    await action(registry, {
+      action: "register",
+      runner_id: "always-on-g1",
+      os: "linux",
+      arch: "amd64",
+      tags: ["provider:github", "agent"],
+      duration_seconds: 3600,
+      idle_timeout: 0
+    });
+    const row = sql.runners.get("always-on-g1");
+    row.connected_at = base - 58 * 60 * 1000;
+    row.expires_at = base + 120_000;
+
+    await registry.alarm();
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const r = (await (await action(registry, { action: "getRunner", runner_id: "always-on-g1" })).json() as any).result;
+    expect(r).toMatchObject({ handover_state: "spawning", successor_id: "always-on-g2" });
+  });
+
+  it("skips alarm handover and marks skipped_idle only when idle_timeout > 0 is configured and exceeded", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const base = Date.now();
     const { registry, sql } = makeRegistry(
@@ -408,7 +437,8 @@ describe("RegistryDO", () => {
         os: "linux",
         arch: "amd64",
         tags: ["provider:github", "agent"],
-        duration_seconds: 3600
+        duration_seconds: 3600,
+        idle_timeout: 1200
       });
       const row = sql.runners.get(id);
       row.connected_at = base - 58 * 60 * 1000;
@@ -422,6 +452,17 @@ describe("RegistryDO", () => {
     const r2 = (await (await action(registry, { action: "getRunner", runner_id: "idle-long" })).json() as any).result;
     expect(r1.handover_state).toBe("skipped_idle");
     expect(r2.handover_state).toBe("skipped_idle");
+  });
+
+  it("allows continuous handover beyond generation 3 when HANDOVER_MAX_GENERATIONS is unset", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ dispatched: true, runner_id: "gha-g4" }), { status: 200 })
+    );
+    const { registry } = makeRegistry({ HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" });
+    await action(registry, { action: "register", runner_id: "gha-g3", os: "linux", arch: "amd64", tags: ["provider:github", "agent"], generation: 3 });
+    const res = await action(registry, { action: "requestHandover", runner_id: "gha-g3", generation: 3 });
+    expect((await res.json() as any).result).toMatchObject({ accepted: true, handover_state: "spawning", next_generation: 4, successor_id: "gha-g4" });
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
   it("routes handover internally via Cloudflare Service Binding MCP_PROXY using MCP_TOKEN with zero extra config", async () => {

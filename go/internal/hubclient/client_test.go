@@ -251,14 +251,87 @@ func TestIdleTimeoutSkipsInFlightRequestsAndExitsWhenIdle(t *testing.T) {
 	}
 }
 
-func TestHandoverSkippedWhenRunnerIsIdleAtThreshold(t *testing.T) {
+func TestHandoverProceedsWhenIdleAndIdleTimeoutDisabled(t *testing.T) {
+	received := make(chan map[string]any, 2)
+	shutdownCh := make(chan string, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close(websocket.StatusNormalClosure, "")
+		for {
+			_, data, err := ws.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var msg map[string]any
+			if json.Unmarshal(data, &msg) == nil && msg["type"] == "handover_request" {
+				received <- msg
+			}
+		}
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{
+		HubURLs:       srv.URL,
+		Token:         "0123456789abcdef",
+		RunnerID:      "runner-always-on",
+		HandoverAfter: 1800,
+		IdleTimeout:   0,
+		TickInterval:  time.Hour,
+		OnShutdown: func(reason string) {
+			select {
+			case shutdownCh <- reason:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		connected := len(c.connections) > 0
+		c.mu.Unlock()
+		if connected {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	base := time.Now().Add(-35 * time.Minute)
+	c.mu.Lock()
+	c.startedAt = base
+	c.lastActivity = base
+	c.mu.Unlock()
+	c.checkLifecycle(base.Add(1801 * time.Second))
+
+	select {
+	case msg := <-received:
+		if msg["runner_id"] != "runner-always-on" {
+			t.Fatalf("unexpected handover_request payload: %#v", msg)
+		}
+	case r := <-shutdownCh:
+		t.Fatalf("always-on runner unexpectedly shut down with %q instead of requesting handover", r)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for handover_request from always-on idle runner")
+	}
+}
+
+func TestHandoverSkippedWhenIdleTimeoutConfigured(t *testing.T) {
 	shutdownCh := make(chan string, 2)
 	c, err := New(Config{
 		HubURLs:       "https://hub.example.com",
 		Token:         "0123456789abcdef",
 		RunnerID:      "runner-idle-handover",
 		HandoverAfter: 1800,
-		IdleTimeout:   0,
+		IdleTimeout:   1800,
 		OnShutdown: func(reason string) {
 			select {
 			case shutdownCh <- reason:
@@ -276,10 +349,10 @@ func TestHandoverSkippedWhenRunnerIsIdleAtThreshold(t *testing.T) {
 
 	select {
 	case r := <-shutdownCh:
-		if r != "idle_at_handover" {
-			t.Fatalf("expected idle_at_handover, got %q", r)
+		if r != "idle_timeout" && r != "idle_at_handover" {
+			t.Fatalf("expected idle shutdown, got %q", r)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("expected idle_at_handover shutdown instead of spawning successor")
+		t.Fatal("expected idle shutdown instead of spawning successor")
 	}
 }

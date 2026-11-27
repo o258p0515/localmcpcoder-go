@@ -170,14 +170,7 @@ func (c *Client) checkLifecycle(now time.Time) {
 	} else if c.cfg.HandoverAfter > 0 && !c.handoverSent && now.Sub(c.startedAt) >= time.Duration(c.cfg.HandoverAfter)*time.Second {
 		c.handoverSent = true
 		idleDur := now.Sub(c.lastActivity)
-		skipForIdle := false
-		if c.active == 0 {
-			if c.cfg.IdleTimeout > 0 && idleDur >= time.Duration(c.cfg.IdleTimeout)*time.Second {
-				skipForIdle = true
-			} else if c.cfg.HandoverAfter >= 1200 && idleDur >= 20*time.Minute {
-				skipForIdle = true
-			}
-		}
+		skipForIdle := c.active == 0 && c.cfg.IdleTimeout > 0 && idleDur >= time.Duration(c.cfg.IdleTimeout)*time.Second
 		if skipForIdle {
 			shutdownReason = "idle_at_handover"
 		} else {

@@ -478,8 +478,11 @@ func (c *Client) websocketURL(raw string) (string, error) {
 	if c.cfg.DurationSeconds > 0 {
 		q.Set("duration_seconds", strconv.Itoa(c.cfg.DurationSeconds))
 	}
-	if c.cfg.HandoverAfter > 0 {
+	if c.cfg.HandoverAfter != 0 {
 		q.Set("handover_after", strconv.Itoa(c.cfg.HandoverAfter))
+	}
+	if c.cfg.IdleTimeout > 0 {
+		q.Set("idle_timeout", strconv.Itoa(c.cfg.IdleTimeout))
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

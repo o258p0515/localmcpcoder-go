@@ -12,7 +12,7 @@ class RegistrySQL {
       return { rowsWritten: 0, toArray: () => [] };
     }
     if (query.startsWith("INSERT INTO runners")) {
-      const [id, os, arch, repo, tags_json, connected_at, provider, account, expires_at, predecessor_id, generation] = args;
+      const [id, os, arch, repo, tags_json, connected_at, provider, account, expires_at, predecessor_id, generation, handover_after, idle_timeout] = args;
       this.runners.set(id, {
         runner_id: id,
         os,
@@ -27,7 +27,9 @@ class RegistrySQL {
         handover_state: "none",
         predecessor_id: predecessor_id ?? "",
         successor_id: "",
-        generation: generation ?? 1
+        generation: generation ?? 1,
+        handover_after: handover_after ?? 0,
+        idle_timeout: idle_timeout ?? 0
       });
       return { rowsWritten: 1, toArray: () => [] };
     }
@@ -121,7 +123,10 @@ class RegistrySQL {
   }
 }
 
-function makeRegistry(envOverrides: Partial<Env> = {}) {
+function makeRegistry(
+  envOverrides: Partial<Env> = {},
+  activityByRunner: Record<string, { has_activity: boolean; last_activity_at: number | null; active_requests: number }> = {}
+) {
   const sql = new RegistrySQL();
   const alarms: number[] = [];
   const shutdownCalls: Array<{ runnerId: string; body: any }> = [];
@@ -136,7 +141,12 @@ function makeRegistry(envOverrides: Partial<Env> = {}) {
     RUNNER_DO: {
       idFromName: (id: string) => id,
       get: (id: string) => ({
-        fetch: async (_url: string, init?: RequestInit) => {
+        fetch: async (url: string, init?: RequestInit) => {
+          if (String(url).endsWith("/activity")) {
+            const act = activityByRunner[id];
+            if (act) return Response.json({ result: { runner_id: id, ...act } });
+            return Response.json({ result: { runner_id: id, has_activity: true, last_activity_at: Date.now(), active_requests: 0 } });
+          }
           shutdownCalls.push({ runnerId: id, body: JSON.parse(String(init?.body ?? "{}")) });
           return Response.json({ result: { notified: 1 } });
         }
@@ -319,23 +329,99 @@ describe("RegistryDO", () => {
     expect(shutdownCalls).toHaveLength(0);
   });
 
-  it("triggers handover automatically from Durable Object alarm before lease expiry", async () => {
+  it("triggers handover automatically from Durable Object alarm before lease expiry for active runners", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ dispatched: true, runner_id: "gha-g2" }), { status: 200 })
     );
-    const { registry } = makeRegistry({ HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" });
+    const base = Date.now();
+    const { registry, sql } = makeRegistry(
+      { HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" },
+      { "gha-g1": { has_activity: true, last_activity_at: base - 30_000, active_requests: 0 } }
+    );
     await action(registry, {
       action: "register",
       runner_id: "gha-g1",
       os: "linux",
       arch: "amd64",
       tags: ["provider:github", "agent"],
-      expires_at: Date.now() + 120_000
+      duration_seconds: 3600
     });
+    // Advance lease window so runner was connected 55 minutes ago and expires in 2 minutes.
+    const row = sql.runners.get("gha-g1");
+    row.connected_at = base - 58 * 60 * 1000;
+    row.expires_at = base + 120_000;
+
     await registry.alarm();
     expect(fetchSpy).toHaveBeenCalledOnce();
     const runner = (await (await action(registry, { action: "getRunner", runner_id: "gha-g1" })).json() as any).result;
     expect(runner).toMatchObject({ handover_state: "spawning", successor_id: "gha-g2" });
+  });
+
+  it("skips alarm handover when handover_after=-1 or duration_seconds <= 300", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const { registry, alarms } = makeRegistry({ HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" });
+
+    await action(registry, {
+      action: "register",
+      runner_id: "short-300",
+      os: "linux",
+      arch: "amd64",
+      tags: ["provider:github", "agent"],
+      duration_seconds: 300
+    });
+    await action(registry, {
+      action: "register",
+      runner_id: "disabled-ho",
+      os: "linux",
+      arch: "amd64",
+      tags: ["provider:github", "agent"],
+      duration_seconds: 3600,
+      handover_after: -1
+    });
+
+    expect(alarms).toHaveLength(0);
+    await registry.alarm();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const shortRunner = (await (await action(registry, { action: "getRunner", runner_id: "short-300" })).json() as any).result;
+    const disabledRunner = (await (await action(registry, { action: "getRunner", runner_id: "disabled-ho" })).json() as any).result;
+    expect(shortRunner.handover_state).toBe("none");
+    expect(disabledRunner.handover_state).toBe("none");
+    expect(disabledRunner.handover_after).toBe(-1);
+  });
+
+  it("skips alarm handover and marks skipped_idle when runner has no recent activity", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const base = Date.now();
+    const { registry, sql } = makeRegistry(
+      { HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" },
+      {
+        "never-used": { has_activity: false, last_activity_at: null, active_requests: 0 },
+        "idle-long": { has_activity: true, last_activity_at: base - 25 * 60 * 1000, active_requests: 0 }
+      }
+    );
+
+    for (const id of ["never-used", "idle-long"]) {
+      await action(registry, {
+        action: "register",
+        runner_id: id,
+        os: "linux",
+        arch: "amd64",
+        tags: ["provider:github", "agent"],
+        duration_seconds: 3600
+      });
+      const row = sql.runners.get(id);
+      row.connected_at = base - 58 * 60 * 1000;
+      row.expires_at = base + 120_000;
+    }
+
+    await registry.alarm();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const r1 = (await (await action(registry, { action: "getRunner", runner_id: "never-used" })).json() as any).result;
+    const r2 = (await (await action(registry, { action: "getRunner", runner_id: "idle-long" })).json() as any).result;
+    expect(r1.handover_state).toBe("skipped_idle");
+    expect(r2.handover_state).toBe("skipped_idle");
   });
 
   it("routes handover internally via Cloudflare Service Binding MCP_PROXY using MCP_TOKEN with zero extra config", async () => {

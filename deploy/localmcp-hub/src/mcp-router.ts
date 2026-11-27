@@ -69,8 +69,16 @@ async function runnerRequest(env: Env, id: string, path: string, body?: unknown)
 
 function metaTools() {
   return [
-    { name: "list_runners", description: "List connected LocalMCP runners and their status.", inputSchema: { type: "object", properties: {} } },
-    { name: "select_runner", description: "Select the default runner for this MCP session.", inputSchema: { type: "object", properties: { runner_id: { type: "string", description: "Runner ID to pin to this session." } }, required: ["runner_id"] } },
+    {
+      name: "list_runners",
+      description: "List connected LocalMCP runners with status (online/draining), lease metadata (expires_at, generation, handover_state, predecessor_id, successor_id), and the session-selected runner. When handover_state is 'spawning', the Hub is already rotating to a Gen 2 successor automatically—do not spawn a duplicate runner; commit/push local changes before cutover because Gen 2 starts on a fresh VM.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "select_runner",
+      description: "Select the default runner for this MCP session. During Make-Before-Break handover, pinned sessions automatically migrate to the Gen 2 successor when it connects—no need to call select_runner again.",
+      inputSchema: { type: "object", properties: { runner_id: { type: "string", description: "Runner ID to pin to this session." } }, required: ["runner_id"] }
+    },
     { name: "get_job_result", description: "Retrieve the status and result of an asynchronous tool call.", inputSchema: { type: "object", properties: { runner_id: { type: "string" }, job_id: { type: "string" } }, required: ["runner_id", "job_id"] } }
   ];
 }
@@ -223,7 +231,7 @@ async function processRequest(request: Request, env: Env, session: string, rpc: 
     protocolVersion: params.protocolVersion ?? "2025-03-26",
     capabilities: { tools: { listChanged: true } },
     serverInfo: { name: "localmcp-hub", version: "1.0.0" },
-    instructions: "Use list_runners to inspect available machines. Use select_runner to pin this session or runner_id to route an individual tool call."
+    instructions: "Use list_runners to inspect available machines, status (online/draining), and lease handover_state. Use select_runner to pin this session (pinned sessions auto-migrate to Gen 2 during Make-Before-Break handover) or runner_id to route an individual tool call."
   });
   if (method === "ping") return json(id, {});
   if (method.startsWith("notifications/")) return null;

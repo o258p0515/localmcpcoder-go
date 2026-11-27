@@ -16,3 +16,6 @@
   - Static OAuth client (`MCP_OAUTH_CLIENT_ID` / `MCP_OAUTH_CLIENT_SECRET`) accepting `MCP_OAUTH_REDIRECT_URIS` and per-app `https://oauth-redirect.googleusercontent.com/r/*` callbacks.
   - Dynamic Client Registration (`POST /register` persisted in `RegistryDO`) with PKCE `S256` and `token_endpoint_auth_method: "none"`.
 - **SSE Framing:** Streamable HTTP SSE frames must use real newline characters (`\n` / `\n\n`), never escaped literal `\\n`.
+- **Zero-Config Internal Handover & Alarm Guards:**
+  - `deploy/localmcp-hub/scripts/prepare-deploy.mjs` must automatically bind `MCP_PROXY -> github-mcp-proxy` when present in the Cloudflare account; `RegistryDO` must route internal handovers over `env.MCP_PROXY.fetch` using the shared `MCP_TOKEN` without requiring extra secrets or webhook URLs.
+  - `RegistryDO.alarm()` must skip runners with `handover_after < 0`, short leases (`<= 300s`), persistent providers (`instabox`, `upstashbox`), or no recent `tools/call` activity (`RunnerDO /activity` -> `handover_state = "skipped_idle"`).

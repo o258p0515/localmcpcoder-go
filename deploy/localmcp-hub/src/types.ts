@@ -11,7 +11,7 @@ export interface Env {
   REGISTRY_DO: DurableObjectNamespace;
   RUNNER_DO: DurableObjectNamespace;
 }
-export type HandoverState = "none" | "requested" | "spawning" | "cutover_done" | "failed";
+export type HandoverState = "none" | "requested" | "spawning" | "cutover_done" | "failed" | "skipped_idle";
 export interface RunnerInfo {
   runner_id: string;
   os: string;
@@ -27,6 +27,8 @@ export interface RunnerInfo {
   predecessor_id?: string | null;
   successor_id?: string | null;
   generation?: number;
+  handover_after?: number;
+  idle_timeout?: number;
 }
 export interface RpcEnvelope {
   jsonrpc: "2.0";

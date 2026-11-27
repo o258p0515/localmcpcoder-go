@@ -3,7 +3,8 @@ import type { Env, HandoverState, RunnerInfo } from "./types";
 const PERSISTENT_PROVIDERS = new Set(["instabox", "upstashbox"]);
 const DEFAULT_MAX_GENERATIONS = 3;
 const HANDOVER_LEAD_MS = 300_000;
-const VALID_HANDOVER_STATES = new Set<HandoverState>(["none", "requested", "spawning", "cutover_done", "failed"]);
+const IDLE_SKIP_MS = 20 * 60 * 1000;
+const VALID_HANDOVER_STATES = new Set<HandoverState>(["none", "requested", "spawning", "cutover_done", "failed", "skipped_idle"]);
 
 function tagValue(tags: string[], prefix: string): string {
   const match = tags.find((tag) => tag.startsWith(prefix));
@@ -28,7 +29,7 @@ export class RegistryDO {
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS runners (runner_id TEXT PRIMARY KEY, os TEXT NOT NULL, arch TEXT NOT NULL, repo TEXT DEFAULT '', tags_json TEXT DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online', connected_at INTEGER NOT NULL, provider TEXT DEFAULT '', account TEXT DEFAULT '', expires_at INTEGER, handover_state TEXT DEFAULT 'none', predecessor_id TEXT DEFAULT '', successor_id TEXT DEFAULT '', generation INTEGER DEFAULT 1)");
+    this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS runners (runner_id TEXT PRIMARY KEY, os TEXT NOT NULL, arch TEXT NOT NULL, repo TEXT DEFAULT '', tags_json TEXT DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online', connected_at INTEGER NOT NULL, provider TEXT DEFAULT '', account TEXT DEFAULT '', expires_at INTEGER, handover_state TEXT DEFAULT 'none', predecessor_id TEXT DEFAULT '', successor_id TEXT DEFAULT '', generation INTEGER DEFAULT 1, handover_after INTEGER DEFAULT 0, idle_timeout INTEGER DEFAULT 0)");
     for (const column of [
       "provider TEXT DEFAULT ''",
       "account TEXT DEFAULT ''",
@@ -36,7 +37,9 @@ export class RegistryDO {
       "handover_state TEXT DEFAULT 'none'",
       "predecessor_id TEXT DEFAULT ''",
       "successor_id TEXT DEFAULT ''",
-      "generation INTEGER DEFAULT 1"
+      "generation INTEGER DEFAULT 1",
+      "handover_after INTEGER DEFAULT 0",
+      "idle_timeout INTEGER DEFAULT 0"
     ]) {
       try {
         this.state.storage.sql.exec(`ALTER TABLE runners ADD COLUMN ${column}`);
@@ -81,13 +84,24 @@ export class RegistryDO {
   async alarm(): Promise<void> {
     const now = Date.now();
     const candidates = this.listRunners().filter((runner) =>
-      runner.status === "online" &&
-      (runner.handover_state ?? "none") === "none" &&
-      typeof runner.expires_at === "number" &&
-      runner.expires_at > 0 &&
-      runner.expires_at - HANDOVER_LEAD_MS <= now
+      this.isEligibleForLeaseAlarm(runner) &&
+      (runner.expires_at as number) - HANDOVER_LEAD_MS <= now
     );
     for (const runner of candidates) {
+      const activity = await this.getRunnerActivity(runner.runner_id);
+      if (activity && activity.active_requests === 0) {
+        const idleMs = typeof activity.last_activity_at === "number" && activity.last_activity_at > 0
+          ? Math.max(0, now - activity.last_activity_at)
+          : Math.max(0, now - runner.connected_at);
+        const idleTimeoutMs = (runner.idle_timeout ?? 0) > 0 ? (runner.idle_timeout as number) * 1000 : 0;
+        const isIdle = !activity.has_activity ||
+          idleMs >= IDLE_SKIP_MS ||
+          (idleTimeoutMs > 0 && idleMs >= idleTimeoutMs);
+        if (isIdle) {
+          this.state.storage.sql.exec("UPDATE runners SET handover_state='skipped_idle' WHERE runner_id=?", runner.runner_id);
+          continue;
+        }
+      }
       await this.requestHandover({
         runner_id: runner.runner_id,
         reason: "lease_alarm",
@@ -110,6 +124,8 @@ export class RegistryDO {
     expires_at?: number | null;
     predecessor_id?: string;
     generation?: number;
+    handover_after?: number;
+    idle_timeout?: number;
   }): Promise<RunnerInfo & { cutover?: { predecessor_id: string; migrated_sessions: number } }> {
     if (!input.runner_id || !input.os || !input.arch) throw new Error("runner_id, os and arch are required");
     const tags = Array.isArray(input.tags) ? input.tags.filter(Boolean) : [];
@@ -119,12 +135,15 @@ export class RegistryDO {
     const predecessorId = String(input.predecessor_id ?? "").trim();
     const generation = parseGeneration(input.generation, tags);
     const durationSeconds = Number(input.duration_seconds ?? 0);
+    const handoverAfter = Number.isInteger(Number(input.handover_after)) ? Number(input.handover_after) : 0;
+    const idleTimeoutRaw = Number(input.idle_timeout ?? 0);
+    const idleTimeout = Number.isFinite(idleTimeoutRaw) && idleTimeoutRaw > 0 ? Math.floor(idleTimeoutRaw) : 0;
     const expiresAt = typeof input.expires_at === "number" && Number.isFinite(input.expires_at) && input.expires_at > 0
       ? Math.floor(input.expires_at)
       : (Number.isFinite(durationSeconds) && durationSeconds > 0 ? now + Math.floor(durationSeconds) * 1000 : null);
 
     this.state.storage.sql.exec(
-      "INSERT INTO runners(runner_id,os,arch,repo,tags_json,status,connected_at,provider,account,expires_at,handover_state,predecessor_id,successor_id,generation) VALUES(?,?,?,?,?,'online',?,?,?,?,'none',?,'',?) ON CONFLICT(runner_id) DO UPDATE SET os=excluded.os,arch=excluded.arch,repo=excluded.repo,tags_json=excluded.tags_json,status='online',connected_at=excluded.connected_at,provider=excluded.provider,account=excluded.account,expires_at=excluded.expires_at,handover_state='none',predecessor_id=excluded.predecessor_id,successor_id='',generation=excluded.generation",
+      "INSERT INTO runners(runner_id,os,arch,repo,tags_json,status,connected_at,provider,account,expires_at,handover_state,predecessor_id,successor_id,generation,handover_after,idle_timeout) VALUES(?,?,?,?,?,'online',?,?,?,?,'none',?,'',?,?,?) ON CONFLICT(runner_id) DO UPDATE SET os=excluded.os,arch=excluded.arch,repo=excluded.repo,tags_json=excluded.tags_json,status='online',connected_at=excluded.connected_at,provider=excluded.provider,account=excluded.account,expires_at=excluded.expires_at,handover_state='none',predecessor_id=excluded.predecessor_id,successor_id='',generation=excluded.generation,handover_after=excluded.handover_after,idle_timeout=excluded.idle_timeout",
       input.runner_id,
       input.os,
       input.arch,
@@ -135,7 +154,9 @@ export class RegistryDO {
       account,
       expiresAt,
       predecessorId,
-      generation
+      generation,
+      handoverAfter,
+      idleTimeout
     );
 
     let cutover: { predecessor_id: string; migrated_sessions: number } | undefined;
@@ -206,6 +227,9 @@ export class RegistryDO {
     const provider = (runner.provider || tagValue(runner.tags, "provider:")).toLowerCase();
     if (PERSISTENT_PROVIDERS.has(provider)) {
       return { accepted: false, reason: "persistent_provider_uses_resume", runner_id: runnerId, provider };
+    }
+    if ((runner.handover_after ?? 0) < 0 && String(input.reason ?? "") === "lease_alarm") {
+      return { accepted: false, reason: "handover_disabled", runner_id: runnerId };
     }
 
     const maxGenerations = Math.max(1, Number(this.env.HANDOVER_MAX_GENERATIONS ?? DEFAULT_MAX_GENERATIONS) || DEFAULT_MAX_GENERATIONS);
@@ -294,6 +318,40 @@ export class RegistryDO {
     }
   }
 
+  private isEligibleForLeaseAlarm(runner: RunnerInfo): boolean {
+    if (runner.status !== "online") return false;
+    if ((runner.handover_state ?? "none") !== "none") return false;
+    if ((runner.handover_after ?? 0) < 0) return false;
+    if (typeof runner.expires_at !== "number" || runner.expires_at <= 0) return false;
+    // Short-lived runners (<= 5 min total lease) must not trigger immediate alarm
+    // handover right after connecting; explicit --handover-after timers still work.
+    if (runner.expires_at - runner.connected_at <= HANDOVER_LEAD_MS) return false;
+    const provider = (runner.provider || tagValue(runner.tags, "provider:")).toLowerCase();
+    if (PERSISTENT_PROVIDERS.has(provider)) return false;
+    return true;
+  }
+
+  private async getRunnerActivity(runnerId: string): Promise<{ has_activity: boolean; last_activity_at: number | null; active_requests: number } | null> {
+    if (!this.env?.RUNNER_DO) return null;
+    try {
+      const stub = this.env.RUNNER_DO.get(this.env.RUNNER_DO.idFromName(runnerId));
+      const response = await stub.fetch("https://runner/activity", { method: "GET" });
+      if (!response.ok) return null;
+      const body = await response.json().catch(() => null) as { result?: Record<string, unknown> } | null;
+      const result = body?.result;
+      if (!result || typeof result.active_requests !== "number" || typeof result.has_activity !== "boolean") {
+        return null;
+      }
+      return {
+        has_activity: result.has_activity,
+        last_activity_at: typeof result.last_activity_at === "number" ? result.last_activity_at : null,
+        active_requests: result.active_requests
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private async notifyRunnerShutdown(runnerId: string, reason: string, successorId: string): Promise<void> {
     if (!this.env?.RUNNER_DO) return;
     try {
@@ -314,12 +372,8 @@ export class RegistryDO {
     const now = Date.now();
     let earliest: number | null = null;
     for (const runner of this.listRunners()) {
-      if (runner.status !== "online") continue;
-      if ((runner.handover_state ?? "none") !== "none") continue;
-      if (typeof runner.expires_at !== "number" || runner.expires_at <= 0) continue;
-      const provider = (runner.provider || tagValue(runner.tags, "provider:")).toLowerCase();
-      if (PERSISTENT_PROVIDERS.has(provider)) continue;
-      const triggerAt = Math.max(now + 1_000, runner.expires_at - HANDOVER_LEAD_MS);
+      if (!this.isEligibleForLeaseAlarm(runner)) continue;
+      const triggerAt = Math.max(now + 1_000, (runner.expires_at as number) - HANDOVER_LEAD_MS);
       if (earliest === null || triggerAt < earliest) earliest = triggerAt;
     }
     if (earliest !== null) {
@@ -441,7 +495,9 @@ export class RegistryDO {
       handover_state: handoverState,
       predecessor_id: row.predecessor_id ? String(row.predecessor_id) : null,
       successor_id: row.successor_id ? String(row.successor_id) : null,
-      generation: Number(row.generation ?? 1) || 1
+      generation: Number(row.generation ?? 1) || 1,
+      handover_after: Number.isInteger(Number(row.handover_after)) ? Number(row.handover_after) : 0,
+      idle_timeout: Number(row.idle_timeout ?? 0) || 0
     };
   }
 }

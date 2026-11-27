@@ -202,4 +202,46 @@ describe("RunnerDO disconnect and handover handling", () => {
     expect(completed.status).toBe(200);
     expect(await completed.json()).toMatchObject({ result: { result: { content: [{ text: "drained-ok" }] } } });
   });
+
+  it("tracks tool call activity without counting tools/list metadata discovery", async () => {
+    const { runner, socket } = makeRunner();
+    const initial = await (await runner.fetch(new Request("https://runner/activity"))).json() as any;
+    expect(initial.result).toMatchObject({ runner_id: "runner-1", has_activity: false, last_activity_at: null, active_requests: 0 });
+
+    const listPromise = runner.fetch(new Request("https://runner/dispatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: { jsonrpc: "2.0", id: "rpc-list", method: "tools/list" } })
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const listFrame = JSON.parse((socket.send as any).mock.calls[0][0]);
+    await runner.webSocketMessage(socket as any, JSON.stringify({
+      type: "rpc_response", req_id: listFrame.req_id, payload: { jsonrpc: "2.0", id: "rpc-list", result: { tools: [] } }
+    }));
+    await listPromise;
+
+    const afterList = await (await runner.fetch(new Request("https://runner/activity"))).json() as any;
+    expect(afterList.result.has_activity).toBe(false);
+
+    const callPromise = runner.fetch(new Request("https://runner/dispatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: { jsonrpc: "2.0", id: "rpc-call", method: "tools/call" }, tool_name: "bash" })
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const duringCall = await (await runner.fetch(new Request("https://runner/activity"))).json() as any;
+    expect(duringCall.result.has_activity).toBe(true);
+    expect(duringCall.result.active_requests).toBe(1);
+    expect(duringCall.result.last_activity_at).toBeGreaterThan(0);
+
+    const callFrame = JSON.parse((socket.send as any).mock.calls[1][0]);
+    await runner.webSocketMessage(socket as any, JSON.stringify({
+      type: "rpc_response", req_id: callFrame.req_id, payload: { jsonrpc: "2.0", id: "rpc-call", result: { content: [{ type: "text", text: "ok" }] } }
+    }));
+    await callPromise;
+
+    const afterCall = await (await runner.fetch(new Request("https://runner/activity"))).json() as any;
+    expect(afterCall.result.has_activity).toBe(true);
+    expect(afterCall.result.active_requests).toBe(0);
+  });
 });

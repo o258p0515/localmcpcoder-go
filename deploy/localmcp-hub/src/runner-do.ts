@@ -13,6 +13,8 @@ export class RunnerDO {
   private ctx: DurableObjectState;
   private env: Env;
   private pending = new Map<string, Pending>();
+  private lastActivityAt: number | null = null;
+  private lastActivityPersistedAt = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
@@ -37,8 +39,29 @@ export class RunnerDO {
     if (url.pathname.endsWith("/connect")) return this.connect(request);
     if (url.pathname.endsWith("/dispatch")) return this.dispatch(request);
     if (url.pathname.endsWith("/shutdown")) return this.shutdown(request);
+    if (url.pathname.endsWith("/activity")) return this.activity();
     if (url.pathname.endsWith("/job")) return this.getJob(url.searchParams.get("job_id") ?? "");
     return new Response("not found", { status: 404 });
+  }
+
+  private async activity(): Promise<Response> {
+    const runnerId = String(await this.ctx.storage.get<string>("runner_id") ?? "");
+    let lastActivityAt = this.lastActivityAt;
+    if (lastActivityAt === null) {
+      const stored = await this.ctx.storage.get<number>("last_activity_at");
+      if (typeof stored === "number" && Number.isFinite(stored) && stored > 0) {
+        lastActivityAt = stored;
+        this.lastActivityAt = stored;
+      }
+    }
+    return Response.json({
+      result: {
+        runner_id: runnerId,
+        has_activity: lastActivityAt !== null,
+        last_activity_at: lastActivityAt,
+        active_requests: this.pending.size
+      }
+    });
   }
 
   private async connect(request: Request): Promise<Response> {
@@ -49,6 +72,8 @@ export class RunnerDO {
     const runnerId = url.searchParams.get("id") ?? "";
     if (!runnerId) return new Response("runner id required", { status: 400 });
     const durationSeconds = Number(url.searchParams.get("duration_seconds") ?? "0");
+    const handoverAfter = Number(url.searchParams.get("handover_after") ?? "0");
+    const idleTimeout = Number(url.searchParams.get("idle_timeout") ?? "0");
     const generation = Number(url.searchParams.get("generation") ?? "1");
     const predecessorId = (url.searchParams.get("predecessor_id") ?? "").trim();
     const meta = {
@@ -60,7 +85,9 @@ export class RunnerDO {
       connected_at: Date.now(),
       ...(predecessorId ? { predecessor_id: predecessorId } : {}),
       ...(Number.isInteger(generation) && generation >= 1 ? { generation } : {}),
-      ...(Number.isFinite(durationSeconds) && durationSeconds > 0 ? { duration_seconds: Math.floor(durationSeconds) } : {})
+      ...(Number.isFinite(durationSeconds) && durationSeconds > 0 ? { duration_seconds: Math.floor(durationSeconds) } : {}),
+      ...(Number.isInteger(handoverAfter) && handoverAfter !== 0 ? { handover_after: handoverAfter } : {}),
+      ...(Number.isFinite(idleTimeout) && idleTimeout > 0 ? { idle_timeout: Math.floor(idleTimeout) } : {})
     };
     // A reconnect supersedes every still-open socket for this runner ID. Close
     // the old transport before accepting the new one so dispatch cannot race
@@ -124,6 +151,14 @@ export class RunnerDO {
     const toolName = body.tool_name ?? body.payload?.method ?? "unknown";
     const wantsAsync = body.async === true;
     const socket = sockets[0];
+    if (body.payload?.method === "tools/call") {
+      const now = Date.now();
+      this.lastActivityAt = now;
+      if (this.lastActivityPersistedAt === 0 || now - this.lastActivityPersistedAt >= 10_000) {
+        this.lastActivityPersistedAt = now;
+        try { await this.ctx.storage.put("last_activity_at", now); } catch { /* best-effort */ }
+      }
+    }
 
     const pendingResult = new Promise<any>((resolve) => {
       const entry: Pending = { resolve, jobCreated: wantsAsync, socket };

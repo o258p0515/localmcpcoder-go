@@ -45,6 +45,27 @@ func TestWebsocketURLBuildsRunnerMetadata(t *testing.T) {
 			t.Fatalf("%q missing %q", got, want)
 		}
 	}
+
+	cDisabled, err := New(Config{
+		HubURLs:         "https://hub.example.com",
+		Token:           "0123456789abcdef",
+		RunnerID:        "test-02",
+		DurationSeconds: 600,
+		HandoverAfter:   -1,
+		IdleTimeout:     30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotDisabled, err := cDisabled.websocketURL("https://hub.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"handover_after=-1", "idle_timeout=30"} {
+		if !strings.Contains(gotDisabled, want) {
+			t.Fatalf("%q missing %q", gotDisabled, want)
+		}
+	}
 }
 
 func TestNewRequiresHubCredentials(t *testing.T) {

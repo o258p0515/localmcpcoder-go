@@ -286,4 +286,26 @@ describe("MCP Hub routing", () => {
     expect(body.result.content[0].text).toContain("No online isolated Git executor runner");
     expect(body.result.content[0].text).toContain("agent-1 (linux/amd64)");
   });
+
+  it("preserves pair:<id> git_execute routing after atomic session cutover to successor", async () => {
+    const { env, sessions, runnerCalls, runners } = fakeEnv({
+      runners: [
+        { runner_id: "agent-g1", os: "linux", arch: "amd64", tags: ["linux", "agent", "pair:team-1"], status: "online" },
+        { runner_id: "git-1", os: "linux", arch: "amd64", tags: ["linux", "git", "isolated", "pair:team-1"], status: "online" },
+        { runner_id: "git-2", os: "linux", arch: "amd64", tags: ["linux", "git", "isolated", "pair:team-2"], status: "online" }
+      ]
+    });
+    await handleMcp(request({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "select_runner", arguments: { runner_id: "agent-g1" } } }), env, "session-handover");
+
+    // Simulate RegistryDO atomic cutover: Gen 2 inherits pair:team-1, session moves to agent-g2, agent-g1 drains.
+    runners[0].status = "draining";
+    runners.push({ runner_id: "agent-g2", os: "linux", arch: "amd64", tags: ["linux", "agent", "pair:team-1", "gen:2"], status: "online" });
+    sessions.set("session-handover", "agent-g2");
+
+    await handleMcp(request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "bash", arguments: { command: "pwd" } } }), env, "session-handover");
+    await handleMcp(request({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "git_execute", arguments: { operation: "status", account: "personal" } } }), env, "session-handover");
+
+    const calls = runnerCalls.filter((c) => c.body.payload?.method === "tools/call");
+    expect(calls.map((c) => c.runnerId)).toEqual(["agent-g2", "git-1"]);
+  });
 });

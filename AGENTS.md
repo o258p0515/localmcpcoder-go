@@ -18,4 +18,4 @@
 - **SSE Framing:** Streamable HTTP SSE frames must use real newline characters (`\n` / `\n\n`), never escaped literal `\\n`.
 - **Zero-Config Internal Handover & Alarm Guards:**
   - `deploy/localmcp-hub/scripts/prepare-deploy.mjs` must automatically bind `MCP_PROXY -> github-mcp-proxy` when present in the Cloudflare account; `RegistryDO` must route internal handovers over `env.MCP_PROXY.fetch` using the shared `MCP_TOKEN` without requiring extra secrets or webhook URLs.
-  - `RegistryDO.alarm()` must skip runners with `handover_after < 0`, short leases (`<= 300s`), persistent providers (`instabox`, `upstashbox`), or no recent `tools/call` activity (`RunnerDO /activity` -> `handover_state = "skipped_idle"`).
+  - `RegistryDO.alarm()` must skip runners with `handover_after < 0`, short leases (`<= 300s`), persistent providers (`instabox`, `upstashbox`), or configured `idle_timeout > 0` exceeded (`RunnerDO /activity` -> `handover_state = "skipped_idle"`). When `idle_timeout = 0` and handover is enabled, runners stay online continuously across generations.

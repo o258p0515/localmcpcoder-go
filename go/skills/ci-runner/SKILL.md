@@ -15,5 +15,5 @@ description: Work reliably on ephemeral GitHub Actions runners, zero-downtime ha
 - **Persist workspace before cutover:** Gen 2 starts on a brand-new VM with a clean disk. Check `list_runners` (`expires_at`, `handover_state`) and commit/push changes before cutover.
 - **Do not spawn duplicates:** If `list_runners` shows `handover_state: "spawning"`, a successor is already booting—do not call `localmcp_hub_start` manually.
 - **Seamless session cutover:** Once Gen 2 connects with `--predecessor-id`, the Hub atomically migrates pinned sessions to Gen 2 (no need to re-call `select_runner`) and signals Gen 1 to drain in-flight requests and exit cleanly with code `0`.
-- **Idle-Skip & short jobs:** Pass `idle_timeout` on `localmcp_hub_start` for interactive/short runs so idle runners exit cleanly without spawning successors, or `handover_after: -1` to disable handover for one-off jobs.
+- **Always-On vs Idle-Skip:** With default `idle_timeout: 0` and handover enabled, runners continuously hand over across generations even when idle. Pass `idle_timeout > 0` on `localmcp_hub_start` to opt into idle-skip/auto-exit when inactive, or `handover_after: -1` to disable handover for one-off jobs.
 - **Persistent sandboxes:** `instabox` and `upstashbox` runners preserve disk and use pause/resume (`reuse_cached: true`) instead of Make-Before-Break handover.

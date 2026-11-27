@@ -1,9 +1,8 @@
 import type { Env, HandoverState, RunnerInfo } from "./types";
 
 const PERSISTENT_PROVIDERS = new Set(["instabox", "upstashbox"]);
-const DEFAULT_MAX_GENERATIONS = 3;
+const DEFAULT_MAX_GENERATIONS = 0; // 0 = unlimited generations for always-on handover
 const HANDOVER_LEAD_MS = 300_000;
-const IDLE_SKIP_MS = 20 * 60 * 1000;
 const VALID_HANDOVER_STATES = new Set<HandoverState>(["none", "requested", "spawning", "cutover_done", "failed", "skipped_idle"]);
 
 function tagValue(tags: string[], prefix: string): string {
@@ -88,18 +87,17 @@ export class RegistryDO {
       (runner.expires_at as number) - HANDOVER_LEAD_MS <= now
     );
     for (const runner of candidates) {
-      const activity = await this.getRunnerActivity(runner.runner_id);
-      if (activity && activity.active_requests === 0) {
-        const idleMs = typeof activity.last_activity_at === "number" && activity.last_activity_at > 0
-          ? Math.max(0, now - activity.last_activity_at)
-          : Math.max(0, now - runner.connected_at);
-        const idleTimeoutMs = (runner.idle_timeout ?? 0) > 0 ? (runner.idle_timeout as number) * 1000 : 0;
-        const isIdle = !activity.has_activity ||
-          idleMs >= IDLE_SKIP_MS ||
-          (idleTimeoutMs > 0 && idleMs >= idleTimeoutMs);
-        if (isIdle) {
-          this.state.storage.sql.exec("UPDATE runners SET handover_state='skipped_idle' WHERE runner_id=?", runner.runner_id);
-          continue;
+      const idleTimeoutMs = (runner.idle_timeout ?? 0) > 0 ? (runner.idle_timeout as number) * 1000 : 0;
+      if (idleTimeoutMs > 0) {
+        const activity = await this.getRunnerActivity(runner.runner_id);
+        if (activity && activity.active_requests === 0) {
+          const idleMs = typeof activity.last_activity_at === "number" && activity.last_activity_at > 0
+            ? Math.max(0, now - activity.last_activity_at)
+            : Math.max(0, now - runner.connected_at);
+          if (idleMs >= idleTimeoutMs) {
+            this.state.storage.sql.exec("UPDATE runners SET handover_state='skipped_idle' WHERE runner_id=?", runner.runner_id);
+            continue;
+          }
         }
       }
       await this.requestHandover({
@@ -232,9 +230,11 @@ export class RegistryDO {
       return { accepted: false, reason: "handover_disabled", runner_id: runnerId };
     }
 
-    const maxGenerations = Math.max(1, Number(this.env.HANDOVER_MAX_GENERATIONS ?? DEFAULT_MAX_GENERATIONS) || DEFAULT_MAX_GENERATIONS);
+    const rawMaxGen = this.env.HANDOVER_MAX_GENERATIONS;
+    const parsedMaxGen = rawMaxGen !== undefined && String(rawMaxGen).trim() !== "" ? Number(rawMaxGen) : DEFAULT_MAX_GENERATIONS;
+    const maxGenerations = Number.isFinite(parsedMaxGen) && parsedMaxGen > 0 ? Math.floor(parsedMaxGen) : 0;
     const generation = Math.max(runner.generation ?? 1, Number(input.generation ?? 0) || 1);
-    if (generation >= maxGenerations) {
+    if (maxGenerations > 0 && generation >= maxGenerations) {
       this.state.storage.sql.exec("UPDATE runners SET handover_state='failed' WHERE runner_id=?", runnerId);
       return { accepted: false, reason: "max_generations_reached", runner_id: runnerId, generation, max_generations: maxGenerations };
     }
@@ -261,7 +261,8 @@ export class RegistryDO {
       reason: String(input.reason ?? "quota_expiring"),
       remaining_seconds: Number(input.remaining_seconds ?? 0),
       active_requests: Number(input.active_requests ?? 0),
-      idle_seconds: Number(input.idle_seconds ?? 0)
+      idle_seconds: Number(input.idle_seconds ?? 0),
+      ...((runner.idle_timeout ?? 0) > 0 ? { idle_timeout: runner.idle_timeout } : {})
     };
 
     try {

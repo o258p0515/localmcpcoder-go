@@ -27,6 +27,7 @@ export interface RunnerInfo {
   predecessor_id?: string | null;
   successor_id?: string | null;
   generation?: number;
+  duration_seconds?: number;
   handover_after?: number;
   idle_timeout?: number;
 }

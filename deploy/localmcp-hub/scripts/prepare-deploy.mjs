@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { cf, required, resolveZone, verifyIdentity } from "./cloudflare.mjs";
-import { isIsolatedPartialHubWorker } from "./worker-safety.mjs";
+import { isIsolatedPartialHubWorker, renderDeployWranglerConfig } from "./worker-safety.mjs";
 
 function mask(value) { process.stdout.write("::add-mask::" + value + "\n"); }
 function exportValue(name, value, secret = true) {
@@ -83,14 +83,18 @@ const admin = createHmac("sha256", token)
   .update("localmcp-hub-admin-v1:" + hubDomain)
   .digest("hex");
 const template = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-const deployConfig = template
-  .replace("__ACCOUNT_ID__", zone.accountId)
-  .replaceAll("__HUB_DOMAIN__", hubDomain)
-  .replaceAll("__ZONE_NAME__", zone.zoneName);
-if (deployConfig.includes("__ACCOUNT_ID__") || deployConfig.includes("__HUB_DOMAIN__") || deployConfig.includes("__ZONE_NAME__")) {
-  throw new Error("Failed to render Wrangler deployment configuration");
-}
+const { configText: deployConfig, proxyServiceBound, proxyWorkerName } = renderDeployWranglerConfig(template, {
+  accountId: zone.accountId,
+  hubDomain,
+  zoneName: zone.zoneName,
+  workerRecords
+});
 writeFileSync(new URL("../wrangler.deploy.jsonc", import.meta.url), deployConfig, { mode: 0o600 });
+if (proxyServiceBound) {
+  console.log(`Auto-bound internal Cloudflare Service Binding MCP_PROXY -> Worker ${proxyWorkerName} for zero-config handover.`);
+} else {
+  console.log("Companion Worker github-mcp-proxy not found in account; skipping optional MCP_PROXY Service Binding.");
+}
 exportValue("HUB_DOMAIN", hubDomain, false);
 exportValue("ADMIN_TOKEN", admin);
 if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "zone_name=" + zone.zoneName + "\n");

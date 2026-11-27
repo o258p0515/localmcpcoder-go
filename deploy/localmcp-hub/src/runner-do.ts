@@ -36,6 +36,7 @@ export class RunnerDO {
     const url = new URL(request.url);
     if (url.pathname.endsWith("/connect")) return this.connect(request);
     if (url.pathname.endsWith("/dispatch")) return this.dispatch(request);
+    if (url.pathname.endsWith("/shutdown")) return this.shutdown(request);
     if (url.pathname.endsWith("/job")) return this.getJob(url.searchParams.get("job_id") ?? "");
     return new Response("not found", { status: 404 });
   }
@@ -47,13 +48,19 @@ export class RunnerDO {
     const url = new URL(request.url);
     const runnerId = url.searchParams.get("id") ?? "";
     if (!runnerId) return new Response("runner id required", { status: 400 });
+    const durationSeconds = Number(url.searchParams.get("duration_seconds") ?? "0");
+    const generation = Number(url.searchParams.get("generation") ?? "1");
+    const predecessorId = (url.searchParams.get("predecessor_id") ?? "").trim();
     const meta = {
       runner_id: runnerId,
       os: url.searchParams.get("os") ?? "unknown",
       arch: url.searchParams.get("arch") ?? "unknown",
       repo: url.searchParams.get("repo") ?? "",
       tags: (url.searchParams.get("tags") ?? "").split(",").filter(Boolean),
-      connected_at: Date.now()
+      connected_at: Date.now(),
+      ...(predecessorId ? { predecessor_id: predecessorId } : {}),
+      ...(Number.isInteger(generation) && generation >= 1 ? { generation } : {}),
+      ...(Number.isFinite(durationSeconds) && durationSeconds > 0 ? { duration_seconds: Math.floor(durationSeconds) } : {})
     };
     // A reconnect supersedes every still-open socket for this runner ID. Close
     // the old transport before accepting the new one so dispatch cannot race
@@ -72,6 +79,33 @@ export class RunnerDO {
     await this.ctx.storage.put("runner_id", runnerId);
     await this.registry({ action: "register", ...meta });
     return new Response(null, { status: 101, webSocket: client } as any);
+  }
+
+  private async shutdown(request: Request): Promise<Response> {
+    let body: { reason?: string; successor_id?: string } = {};
+    try { body = await request.json() as { reason?: string; successor_id?: string }; } catch { /* optional body */ }
+    const runnerId = String(await this.ctx.storage.get<string>("runner_id") ?? "");
+    const reason = String(body.reason || "hub_shutdown");
+    const successorId = typeof body.successor_id === "string" ? body.successor_id : "";
+    if (runnerId) {
+      try { await this.registry({ action: "setStatus", runner_id: runnerId, status: "draining" }); } catch { /* best-effort */ }
+    }
+    const frame = JSON.stringify({
+      type: "shutdown",
+      reason,
+      ...(successorId ? { successor_id: successorId } : {})
+    });
+    const openSockets = this.ctx.getWebSockets().filter((ws) => ws.readyState === 1);
+    let notified = 0;
+    for (const ws of openSockets) {
+      try {
+        ws.send(frame);
+        notified++;
+      } catch {
+        // Ignore broken sockets; runner will disconnect on its own.
+      }
+    }
+    return Response.json({ result: { runner_id: runnerId, notified, status: "draining", reason } });
   }
 
   private async dispatch(request: Request): Promise<Response> {
@@ -162,6 +196,28 @@ export class RunnerDO {
 
     if (frame.type === "status_update" && frame.status === "draining") {
       if (runnerId) await this.registry({ action: "setStatus", runner_id: runnerId, status: "draining" });
+      return;
+    }
+    if (frame.type === "handover_request") {
+      if (!runnerId) return;
+      try {
+        const result = await this.registry({
+          action: "requestHandover",
+          runner_id: runnerId,
+          reason: frame.reason,
+          remaining_seconds: frame.remaining_seconds,
+          active_requests: frame.active_requests,
+          idle_seconds: frame.idle_seconds,
+          generation: frame.generation,
+          tags: frame.tags,
+          os: frame.os,
+          arch: frame.arch,
+          repo: frame.repo
+        });
+        try { ws.send(JSON.stringify({ type: "handover_ack", ...result })); } catch { /* ignore */ }
+      } catch {
+        // Keep predecessor runner alive if handover orchestration fails.
+      }
       return;
     }
     if (frame.type !== "rpc_response" || !frame.req_id) return;
@@ -279,4 +335,3 @@ export class RunnerDO {
 function idFromAttachment(ws: WebSocket): string {
   return String((ws as any).deserializeAttachment?.()?.runner_id ?? "");
 }
-  282

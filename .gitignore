@@ -8,3 +8,6 @@ mcp
 # Keep the nested GitHub MCP proxy source directory tracked.
 !deploy/github-mcp-proxy/src/mcp/
 !deploy/github-mcp-proxy/src/mcp/**
+# Keep Go entrypoint package tracked.
+!go/cmd/mcp/
+!go/cmd/mcp/**

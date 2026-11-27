@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RegistryDO } from "../src/registry-do";
 import type { Env } from "../src/types";
 
@@ -8,9 +8,27 @@ class RegistrySQL {
   grants = new Map<string, { grant_type: string; expires_at: number }>();
   clients = new Map<string, any>();
   exec(query: string, ...args: any[]) {
+    if (query.startsWith("ALTER TABLE")) {
+      return { rowsWritten: 0, toArray: () => [] };
+    }
     if (query.startsWith("INSERT INTO runners")) {
-      const [id, os, arch, repo, tags_json, connected_at] = args;
-      this.runners.set(id, { runner_id: id, os, arch, repo, tags_json, status: "online", connected_at });
+      const [id, os, arch, repo, tags_json, connected_at, provider, account, expires_at, predecessor_id, generation] = args;
+      this.runners.set(id, {
+        runner_id: id,
+        os,
+        arch,
+        repo,
+        tags_json,
+        status: "online",
+        connected_at,
+        provider: provider ?? "",
+        account: account ?? "",
+        expires_at: expires_at ?? null,
+        handover_state: "none",
+        predecessor_id: predecessor_id ?? "",
+        successor_id: "",
+        generation: generation ?? 1
+      });
       return { rowsWritten: 1, toArray: () => [] };
     }
     if (query.startsWith("DELETE FROM runners")) {
@@ -21,15 +39,51 @@ class RegistrySQL {
       let count = 0; for (const [key, id] of this.sessions) if (id === args[0]) { this.sessions.delete(key); count++; }
       return { rowsWritten: count, toArray: () => [] };
     }
-    if (query.startsWith("UPDATE runners SET status")) {
+    if (query.startsWith("UPDATE session_targets SET runner_id=?")) {
+      const [successorId, _updatedAt, predecessorId] = args;
+      let count = 0;
+      for (const [key, id] of this.sessions) {
+        if (id === predecessorId) {
+          this.sessions.set(key, successorId);
+          count++;
+        }
+      }
+      return { rowsWritten: count, toArray: () => [] };
+    }
+    if (query.startsWith("UPDATE runners SET status='draining',handover_state='cutover_done'")) {
+      const [successorId, predecessorId] = args;
+      const row = this.runners.get(predecessorId);
+      if (row) {
+        row.status = "draining";
+        row.handover_state = "cutover_done";
+        row.successor_id = successorId;
+      }
+      return { rowsWritten: row ? 1 : 0, toArray: () => [] };
+    }
+    if (query.startsWith("UPDATE runners SET handover_state='spawning',successor_id=?")) {
+      const [successorId, runnerId] = args;
+      const row = this.runners.get(runnerId);
+      if (row) {
+        row.handover_state = "spawning";
+        row.successor_id = successorId;
+      }
+      return { rowsWritten: row ? 1 : 0, toArray: () => [] };
+    }
+    if (query.startsWith("UPDATE runners SET handover_state='")) {
+      const match = query.match(/handover_state='([^']+)'/);
+      const row = this.runners.get(args[0]);
+      if (row && match) row.handover_state = match[1];
+      return { rowsWritten: row ? 1 : 0, toArray: () => [] };
+    }
+    if (query.startsWith("UPDATE runners SET status=?")) {
       const row = this.runners.get(args[1]); if (row) row.status = args[0];
       return { rowsWritten: row ? 1 : 0, toArray: () => [] };
     }
     if (query.startsWith("SELECT * FROM runners ORDER BY")) {
-      return { rowsWritten: 0, toArray: () => [...this.runners.values()].sort((a,b) => b.connected_at-a.connected_at) };
+      return { rowsWritten: 0, toArray: () => [...this.runners.values()].sort((a, b) => b.connected_at - a.connected_at) };
     }
     if (query.startsWith("SELECT * FROM runners WHERE")) {
-      const row = this.runners.get(args[0]); return { rowsWritten: 0, toArray: () => row ? [row] : [] };
+      const row = this.runners.get(args[0]); return { rowsWritten: 0, toArray: () => row ? [{ ...row }] : [] };
     }
     if (query.startsWith("SELECT runner_id FROM session_targets")) {
       const id = this.sessions.get(args[0]); return { rowsWritten: 0, toArray: () => id ? [{ runner_id: id }] : [] };
@@ -66,20 +120,66 @@ class RegistrySQL {
     return { rowsWritten: 0, toArray: () => [] };
   }
 }
-function makeRegistry() {
+
+function makeRegistry(envOverrides: Partial<Env> = {}) {
   const sql = new RegistrySQL();
-  const state = { storage: { sql } };
-  return { registry: new RegistryDO(state as any, {} as Env), sql };
+  const alarms: number[] = [];
+  const shutdownCalls: Array<{ runnerId: string; body: any }> = [];
+  const state = {
+    storage: {
+      sql,
+      setAlarm: async (ts: number) => { alarms.push(ts); }
+    }
+  };
+  const env = {
+    MCP_TOKEN: "test-mcp-token-0123456789abcdef",
+    RUNNER_DO: {
+      idFromName: (id: string) => id,
+      get: (id: string) => ({
+        fetch: async (_url: string, init?: RequestInit) => {
+          shutdownCalls.push({ runnerId: id, body: JSON.parse(String(init?.body ?? "{}")) });
+          return Response.json({ result: { notified: 1 } });
+        }
+      })
+    },
+    ...envOverrides
+  } as unknown as Env;
+  return { registry: new RegistryDO(state as any, env), sql, alarms, shutdownCalls };
 }
+
 async function action(registry: RegistryDO, body: Record<string, unknown>) {
   return registry.fetch(new Request("https://registry/internal", { method: "POST", body: JSON.stringify(body) }));
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("RegistryDO", () => {
-  it("registers and updates runner metadata", async () => {
-    const { registry } = makeRegistry();
-    const response = await action(registry, { action: "register", runner_id: "r1", os: "linux", arch: "amd64", repo: "o/r", tags: ["go"] });
-    expect((await response.json() as any).result).toMatchObject({ runner_id: "r1", status: "online", tags: ["go"] });
+  it("registers and updates runner metadata including lease fields", async () => {
+    const { registry, alarms } = makeRegistry();
+    const response = await action(registry, {
+      action: "register",
+      runner_id: "r1",
+      os: "linux",
+      arch: "amd64",
+      repo: "o/r",
+      tags: ["provider:github", "account:personal", "go", "agent"],
+      duration_seconds: 3600
+    });
+    const result = (await response.json() as any).result;
+    expect(result).toMatchObject({
+      runner_id: "r1",
+      status: "online",
+      provider: "github",
+      account: "personal",
+      handover_state: "none",
+      generation: 1
+    });
+    expect(result.expires_at).toBeGreaterThan(Date.now());
+    expect(alarms.length).toBe(1);
   });
+
   it("unregisters a runner and clears its session targets", async () => {
     const { registry, sql } = makeRegistry();
     await action(registry, { action: "register", runner_id: "r1", os: "linux", arch: "amd64" });
@@ -88,12 +188,14 @@ describe("RegistryDO", () => {
     expect((await response.json() as any).result.removed).toBe(true);
     expect(sql.sessions.size).toBe(0);
   });
+
   it("sets only supported runner states", async () => {
     const { registry } = makeRegistry();
     await action(registry, { action: "register", runner_id: "r1", os: "linux", arch: "amd64" });
     expect((await (await action(registry, { action: "setStatus", runner_id: "r1", status: "draining" })).json() as any).result.status).toBe("draining");
     expect((await action(registry, { action: "setStatus", runner_id: "r1", status: "broken" })).status).toBe(500);
   });
+
   it("pins a session to an online runner and rejects an offline one", async () => {
     const { registry } = makeRegistry();
     await action(registry, { action: "register", runner_id: "r1", os: "linux", arch: "amd64" });
@@ -101,6 +203,7 @@ describe("RegistryDO", () => {
     await action(registry, { action: "setStatus", runner_id: "r1", status: "draining" });
     expect((await action(registry, { action: "setSessionRunner", session_key: "s2", runner_id: "r1" })).status).toBe(500);
   });
+
   it("consumes OAuth grants exactly once", async () => {
     const { registry, sql } = makeRegistry();
     const expiry = Date.now() + 60_000;
@@ -109,6 +212,7 @@ describe("RegistryDO", () => {
     expect((await (await action(registry, { action: "consumeOAuthGrant", jti: "code-1", grant_type: "code" })).json() as any).result.consumed).toBe(false);
     expect(sql.grants.size).toBe(0);
   });
+
   it("stores and retrieves DCR OAuth clients", async () => {
     const { registry } = makeRegistry();
     const expiry = Date.now() + 60_000;
@@ -129,6 +233,7 @@ describe("RegistryDO", () => {
       redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"]
     });
   });
+
   it("resolves runner list and selected session in one combined action", async () => {
     const { registry } = makeRegistry();
     await action(registry, { action: "register", runner_id: "r1", os: "linux", arch: "amd64" });
@@ -139,6 +244,7 @@ describe("RegistryDO", () => {
       selected_runner: "r1"
     });
   });
+
   it("lists runners in most-recently-connected order", async () => {
     const { registry } = makeRegistry();
     const clock = vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(200);
@@ -148,5 +254,128 @@ describe("RegistryDO", () => {
     expect(result.result.map((r: any) => r.runner_id)).toEqual(["newer", "older"]);
     clock.mockRestore();
   });
+
+  it("atomically migrates all session targets and shuts down predecessor on make-before-break cutover", async () => {
+    const { registry, sql, shutdownCalls } = makeRegistry();
+    await action(registry, { action: "register", runner_id: "gha-g1", os: "linux", arch: "amd64", tags: ["provider:github", "agent", "pair:p1"], generation: 1 });
+    await action(registry, { action: "setSessionRunner", session_key: "default", runner_id: "gha-g1" });
+    await action(registry, { action: "setSessionRunner", session_key: "session-a", runner_id: "gha-g1" });
+
+    const reg2 = await action(registry, {
+      action: "register",
+      runner_id: "gha-g2",
+      os: "linux",
+      arch: "amd64",
+      tags: ["provider:github", "agent", "pair:p1"],
+      predecessor_id: "gha-g1",
+      generation: 2
+    });
+    const reg2Body = (await reg2.json() as any).result;
+    expect(reg2Body.cutover).toEqual({ predecessor_id: "gha-g1", migrated_sessions: 2 });
+    expect(sql.sessions.get("default")).toBe("gha-g2");
+    expect(sql.sessions.get("session-a")).toBe("gha-g2");
+
+    const oldRunner = (await (await action(registry, { action: "getRunner", runner_id: "gha-g1" })).json() as any).result;
+    expect(oldRunner).toMatchObject({ status: "draining", handover_state: "cutover_done", successor_id: "gha-g2" });
+    expect(shutdownCalls).toEqual([{ runnerId: "gha-g1", body: { reason: "handover_complete", successor_id: "gha-g2" } }]);
+
+    // Unregistering predecessor after drain must not delete migrated sessions.
+    await action(registry, { action: "unregister", runner_id: "gha-g1" });
+    expect(sql.sessions.get("default")).toBe("gha-g2");
+    expect(sql.sessions.get("session-a")).toBe("gha-g2");
+  });
+
+  it("skips spawning replacement for persistent providers (instabox/upstashbox)", async () => {
+    const { registry } = makeRegistry({ HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" });
+    await action(registry, { action: "register", runner_id: "ub-1", os: "linux", arch: "arm64", tags: ["provider:upstashbox", "agent"] });
+    const res = await action(registry, { action: "requestHandover", runner_id: "ub-1", reason: "quota_expiring" });
+    expect((await res.json() as any).result).toMatchObject({ accepted: false, reason: "persistent_provider_uses_resume", provider: "upstashbox" });
+  });
+
+  it("enforces max_generations to prevent handover storms", async () => {
+    const { registry } = makeRegistry({ HANDOVER_MAX_GENERATIONS: "3", HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" });
+    await action(registry, { action: "register", runner_id: "gha-g3", os: "linux", arch: "amd64", tags: ["provider:github", "agent"], generation: 3 });
+    const res = await action(registry, { action: "requestHandover", runner_id: "gha-g3", generation: 3 });
+    expect((await res.json() as any).result).toMatchObject({ accepted: false, reason: "max_generations_reached", generation: 3, max_generations: 3 });
+  });
+
+  it("keeps predecessor online without shutdown when handover webhook fails", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "quota exhausted" }), { status: 503 })
+    );
+    const { registry, shutdownCalls } = makeRegistry({ HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" });
+    await action(registry, { action: "register", runner_id: "gha-g1", os: "linux", arch: "amd64", tags: ["provider:github", "account:personal", "pair:p1", "run:123", "gen:1", "agent"] });
+    const res = await action(registry, { action: "requestHandover", runner_id: "gha-g1", reason: "quota_expiring" });
+    expect((await res.json() as any).result).toMatchObject({ accepted: false, reason: "spawn_failed" });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const sentBody = JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body));
+    expect(sentBody.tags).toContain("pair:p1");
+    expect(sentBody.tags).not.toContain("run:123");
+    expect(sentBody.tags).not.toContain("gen:1");
+
+    const runner = (await (await action(registry, { action: "getRunner", runner_id: "gha-g1" })).json() as any).result;
+    expect(runner.status).toBe("online");
+    expect(runner.handover_state).toBe("failed");
+    expect(shutdownCalls).toHaveLength(0);
+  });
+
+  it("triggers handover automatically from Durable Object alarm before lease expiry", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ dispatched: true, runner_id: "gha-g2" }), { status: 200 })
+    );
+    const { registry } = makeRegistry({ HANDOVER_WEBHOOK_URL: "https://proxy.example.com/internal/hub/handover" });
+    await action(registry, {
+      action: "register",
+      runner_id: "gha-g1",
+      os: "linux",
+      arch: "amd64",
+      tags: ["provider:github", "agent"],
+      expires_at: Date.now() + 120_000
+    });
+    await registry.alarm();
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const runner = (await (await action(registry, { action: "getRunner", runner_id: "gha-g1" })).json() as any).result;
+    expect(runner).toMatchObject({ handover_state: "spawning", successor_id: "gha-g2" });
+  });
+
+  it("routes handover internally via Cloudflare Service Binding MCP_PROXY using MCP_TOKEN with zero extra config", async () => {
+    const proxyCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const proxyFetcher = {
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        proxyCalls.push({ url: String(input), init });
+        return Response.json({ dispatched: true, runner_id: "gha-g2" }, { status: 200 });
+      }
+    } as unknown as Fetcher;
+
+    const { registry } = makeRegistry({ MCP_PROXY: proxyFetcher });
+    await action(registry, {
+      action: "register",
+      runner_id: "gha-g1",
+      os: "linux",
+      arch: "amd64",
+      repo: "o258p0515/localmcpcoder-go",
+      tags: ["provider:github", "account:personal", "pair:p1", "agent"],
+      duration_seconds: 3600
+    });
+
+    const res = await action(registry, { action: "requestHandover", runner_id: "gha-g1", reason: "quota_expiring" });
+    const body = (await res.json() as any).result;
+    expect(body).toMatchObject({
+      accepted: true,
+      handover_state: "spawning",
+      transport: "service_binding",
+      successor_id: "gha-g2"
+    });
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]!.url).toBe("https://github-mcp-proxy/internal/hub/handover");
+    expect((proxyCalls[0]!.init?.headers as Record<string, string>).Authorization).toBe("Bearer test-mcp-token-0123456789abcdef");
+    const sent = JSON.parse(String(proxyCalls[0]!.init?.body));
+    expect(sent).toMatchObject({
+      predecessor_id: "gha-g1",
+      provider: "github",
+      account: "personal",
+      generation: 2
+    });
+    expect(sent.tags).toContain("pair:p1");
+  });
 });
-  152

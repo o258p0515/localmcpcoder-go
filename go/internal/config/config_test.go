@@ -23,3 +23,32 @@ func TestLoadHubModeUsesMCPTokenWithoutHubSecret(t *testing.T){
  withArgs(t,"--root",root,"--tunnel","hub")
  c,err:=Load();if err!=nil{t.Fatal(err)};if c.Token!="0123456789abcdef0123456789abcdef"{t.Fatalf("MCP_TOKEN not loaded")}
 }
+
+func TestLoadHandoverAndLifecycleFlags(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MCP_TOKEN", "0123456789abcdef0123456789abcdef")
+	t.Setenv("GITHUB_ACTIONS", "")
+	withArgs(t, "--root", root, "--tunnel", "hub", "--hub-urls", "https://hub.example.com", "--duration-seconds", "20400", "--idle-timeout", "900", "--predecessor-id", "runner-g1", "--generation", "2")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DurationSeconds != 20400 || c.HandoverAfter != 19800 {
+		t.Fatalf("expected auto handover_after=19800, got duration=%d handover=%d", c.DurationSeconds, c.HandoverAfter)
+	}
+	if c.IdleTimeout != 900 || c.PredecessorID != "runner-g1" || c.Generation != 2 {
+		t.Fatalf("unexpected lifecycle config: %#v", c)
+	}
+	if c.ShutdownToken != c.Token {
+		t.Fatalf("expected ShutdownToken to default to Token")
+	}
+
+	withArgs(t, "--root", root, "--tunnel", "hub", "--hub-urls", "https://hub.example.com", "--duration-seconds", "20400", "--handover-after", "-1")
+	c2, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.HandoverAfter != -1 {
+		t.Fatalf("expected handover-after=-1 to disable handover, got %d", c2.HandoverAfter)
+	}
+}

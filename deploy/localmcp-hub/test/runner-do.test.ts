@@ -47,6 +47,7 @@ class FakeSQL {
 function makeRunner() {
   const sql = new FakeSQL();
   const values = new Map<string, unknown>([["runner_id", "runner-1"]]);
+  const registryCalls: any[] = [];
   const socket = {
     readyState: 1,
     send: vi.fn(),
@@ -62,15 +63,22 @@ function makeRunner() {
     acceptWebSocket: vi.fn()
   };
   const registryStub = {
-    fetch: async () => Response.json({ result: true })
+    fetch: async (_url: any, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      registryCalls.push(body);
+      if (body.action === "requestHandover") {
+        return Response.json({ result: { accepted: true, handover_state: "spawning", successor_id: "runner-2" } });
+      }
+      return Response.json({ result: true });
+    }
   };
   const env = {
     REGISTRY_DO: { idFromName: () => "global", get: () => registryStub }
   } as unknown as Env;
-  return { runner: new RunnerDO(state as any, env), socket, sql };
+  return { runner: new RunnerDO(state as any, env), socket, sql, registryCalls };
 }
 
-describe("RunnerDO disconnect handling", () => {
+describe("RunnerDO disconnect and handover handling", () => {
   it("fails a pending synchronous dispatch instead of leaving the MCP request hanging", async () => {
     const { runner, socket } = makeRunner();
     const pending = runner.fetch(new Request("https://runner/dispatch", {
@@ -122,6 +130,7 @@ describe("RunnerDO disconnect handling", () => {
     expect(job.status).toBe("failed");
     expect(job.result.error.message).toContain("disconnected");
   });
+
   it("routes overlapping reconnect sockets to the newest and ignores the old socket close", async () => {
     const sql = new FakeSQL();
     const oldSocket = { readyState: 1, send: vi.fn(), deserializeAttachment: () => ({ runner_id: "runner-1", connected_at: 1 }) };
@@ -148,5 +157,49 @@ describe("RunnerDO disconnect handling", () => {
     await runner.webSocketClose(oldSocket as any);
     expect(registryCalls.some((call) => call.action === "unregister")).toBe(false);
   });
+
+  it("forwards handover_request frames to RegistryDO and replies with handover_ack", async () => {
+    const { runner, socket, registryCalls } = makeRunner();
+    await runner.webSocketMessage(socket as any, JSON.stringify({
+      type: "handover_request",
+      reason: "quota_expiring",
+      remaining_seconds: 300,
+      generation: 1
+    }));
+    expect(registryCalls.some((c) => c.action === "requestHandover" && c.runner_id === "runner-1")).toBe(true);
+    const ack = JSON.parse((socket.send as any).mock.calls[0][0]);
+    expect(ack).toMatchObject({ type: "handover_ack", accepted: true, handover_state: "spawning", successor_id: "runner-2" });
+  });
+
+  it("sends WebSocket shutdown frame while letting in-flight requests finish draining", async () => {
+    const { runner, socket, registryCalls } = makeRunner();
+    const inflight = runner.fetch(new Request("https://runner/dispatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: { jsonrpc: "2.0", id: "rpc-inflight", method: "tools/call" }, tool_name: "bash" })
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const reqFrame = JSON.parse((socket.send as any).mock.calls[0][0]);
+
+    const shutdownRes = await runner.fetch(new Request("https://runner/shutdown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "handover_complete", successor_id: "runner-2" })
+    }));
+    expect(shutdownRes.status).toBe(200);
+    expect(await shutdownRes.json()).toMatchObject({ result: { runner_id: "runner-1", notified: 1, status: "draining" } });
+    expect(registryCalls.some((c) => c.action === "setStatus" && c.status === "draining")).toBe(true);
+    const shutdownFrame = JSON.parse((socket.send as any).mock.calls[1][0]);
+    expect(shutdownFrame).toEqual({ type: "shutdown", reason: "handover_complete", successor_id: "runner-2" });
+
+    // In-flight request still completes cleanly after shutdown frame was sent.
+    await runner.webSocketMessage(socket as any, JSON.stringify({
+      type: "rpc_response",
+      req_id: reqFrame.req_id,
+      payload: { jsonrpc: "2.0", id: "rpc-inflight", result: { content: [{ type: "text", text: "drained-ok" }] } }
+    }));
+    const completed = await inflight;
+    expect(completed.status).toBe(200);
+    expect(await completed.json()).toMatchObject({ result: { result: { content: [{ text: "drained-ok" }] } } });
+  });
 });
-  152

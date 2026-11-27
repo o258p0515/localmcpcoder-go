@@ -17,6 +17,7 @@ type Config struct {
 	Root             string
 	Port             int
 	Token            string
+	ShutdownToken    string
 	Shell            string
 	MaxOutput        int
 	AllowOutsideRoot bool
@@ -31,6 +32,11 @@ type Config struct {
 	RunnerTags       string
 	ToolProfile      string
 	GitCredentialURL string
+	DurationSeconds  int
+	HandoverAfter    int
+	IdleTimeout      int
+	PredecessorID    string
+	Generation       int
 }
 
 func env(k, d string) string {
@@ -65,13 +71,46 @@ func Load() (Config, error) {
 	runnerID := flag.String("runner-id", env("RUNNER_ID", ""), "stable runner identifier")
 	runnerTags := flag.String("runner-tags", env("RUNNER_TAGS", ""), "comma-separated runner tags")
 	toolProfile := flag.String("tool-profile", env("MCP_TOOL_PROFILE", "default"), "tool profile: default or git-executor")
+	durationSeconds := flag.Int("duration-seconds", atoi(env("DURATION_SECONDS", "0"), 0), "planned runner lifetime in seconds")
+	handoverAfter := flag.Int("handover-after", atoi(env("HANDOVER_AFTER", "0"), 0), "seconds after start to request zero-downtime handover (-1 disables)")
+	idleTimeout := flag.Int("idle-timeout", atoi(env("IDLE_TIMEOUT", "0"), 0), "seconds of inactivity with zero active requests before graceful exit")
+	predecessorID := flag.String("predecessor-id", env("LOCALMCP_PREDECESSOR_ID", ""), "runner ID being replaced during make-before-break handover")
+	generation := flag.Int("generation", atoi(env("LOCALMCP_GENERATION", "1"), 1), "runner generation counter")
 	flag.Parse()
 
 	abs, err := filepath.Abs(*root)
 	if err != nil {
 		return c, err
 	}
-	c = Config{Root: abs, Port: *port, Shell: *shell, MaxOutput: *max, AllowOutsideRoot: *outside, Tunnel: *tunnel, Host: *host, SkillsDir: *skills, TSHostname: *tsHost, TSMode: *tsMode, TSTag: *tsTag, HubURLs: *hubURLs, RunnerID: *runnerID, RunnerTags: *runnerTags, ToolProfile: *toolProfile, GitCredentialURL: env("GIT_CREDENTIAL_URL", ""), Token: os.Getenv("MCP_TOKEN")}
+	effectiveHandover := *handoverAfter
+	if effectiveHandover == 0 && *durationSeconds > 600 {
+		effectiveHandover = *durationSeconds - 600
+	}
+	c = Config{
+		Root:             abs,
+		Port:             *port,
+		Shell:            *shell,
+		MaxOutput:        *max,
+		AllowOutsideRoot: *outside,
+		Tunnel:           *tunnel,
+		Host:             *host,
+		SkillsDir:        *skills,
+		TSHostname:       *tsHost,
+		TSMode:           *tsMode,
+		TSTag:            *tsTag,
+		HubURLs:          *hubURLs,
+		RunnerID:         *runnerID,
+		RunnerTags:       *runnerTags,
+		ToolProfile:      *toolProfile,
+		GitCredentialURL: env("GIT_CREDENTIAL_URL", ""),
+		Token:            os.Getenv("MCP_TOKEN"),
+		ShutdownToken:    os.Getenv("MCP_SHUTDOWN_TOKEN"),
+		DurationSeconds:  *durationSeconds,
+		HandoverAfter:    effectiveHandover,
+		IdleTimeout:      *idleTimeout,
+		PredecessorID:    strings.TrimSpace(*predecessorID),
+		Generation:       *generation,
+	}
 	if c.HubURLs != "" {
 		c.Tunnel = "hub"
 	}
@@ -80,6 +119,15 @@ func Load() (Config, error) {
 	}
 	if c.MaxOutput < 1 {
 		return c, errors.New("max-output must be positive")
+	}
+	if c.DurationSeconds < 0 {
+		return c, errors.New("duration-seconds must be non-negative")
+	}
+	if c.IdleTimeout < 0 {
+		return c, errors.New("idle-timeout must be non-negative")
+	}
+	if c.Generation < 1 {
+		return c, errors.New("generation must be at least 1")
 	}
 	if c.ToolProfile != "default" && c.ToolProfile != "git-executor" {
 		return c, errors.New("tool-profile must be default or git-executor")
@@ -118,6 +166,9 @@ func Load() (Config, error) {
 		}
 		_ = os.Chmod(envPath, 0600)
 	}
+	if c.ShutdownToken == "" {
+		c.ShutdownToken = c.Token
+	}
 	if len(c.Token) < 16 {
 		return c, errors.New("MCP_TOKEN must be at least 16 characters")
 	}
@@ -135,7 +186,7 @@ func Load() (Config, error) {
 	}
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		fmt.Fprintln(os.Stdout, "::add-mask::"+c.Token)
-		for _, k := range []string{"CF_API_TOKEN", "CF_API_KEY", "TS_AUTHKEY", "TS_TRUST_CREDS", "TUNNEL_TOKEN"} {
+		for _, k := range []string{"CF_API_TOKEN", "CF_API_KEY", "TS_AUTHKEY", "TS_TRUST_CREDS", "TUNNEL_TOKEN", "MCP_SHUTDOWN_TOKEN"} {
 			if v := os.Getenv(k); v != "" {
 				fmt.Fprintln(os.Stdout, "::add-mask::"+v)
 			}

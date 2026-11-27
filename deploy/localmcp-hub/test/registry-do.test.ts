@@ -12,7 +12,7 @@ class RegistrySQL {
       return { rowsWritten: 0, toArray: () => [] };
     }
     if (query.startsWith("INSERT INTO runners")) {
-      const [id, os, arch, repo, tags_json, connected_at, provider, account, expires_at, predecessor_id, generation, handover_after, idle_timeout] = args;
+      const [id, os, arch, repo, tags_json, connected_at, provider, account, expires_at, predecessor_id, generation, duration_seconds, handover_after, idle_timeout] = args;
       this.runners.set(id, {
         runner_id: id,
         os,
@@ -28,6 +28,7 @@ class RegistrySQL {
         predecessor_id: predecessor_id ?? "",
         successor_id: "",
         generation: generation ?? 1,
+        duration_seconds: duration_seconds ?? 0,
         handover_after: handover_after ?? 0,
         idle_timeout: idle_timeout ?? 0
       });
@@ -501,7 +502,8 @@ describe("RegistryDO", () => {
       predecessor_id: "gha-g1",
       provider: "github",
       account: "personal",
-      generation: 2
+      generation: 2,
+      duration_seconds: 3600
     });
     expect(sent.tags).toContain("pair:p1");
   });

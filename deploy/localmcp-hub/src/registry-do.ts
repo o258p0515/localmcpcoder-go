@@ -28,7 +28,7 @@ export class RegistryDO {
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS runners (runner_id TEXT PRIMARY KEY, os TEXT NOT NULL, arch TEXT NOT NULL, repo TEXT DEFAULT '', tags_json TEXT DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online', connected_at INTEGER NOT NULL, provider TEXT DEFAULT '', account TEXT DEFAULT '', expires_at INTEGER, handover_state TEXT DEFAULT 'none', predecessor_id TEXT DEFAULT '', successor_id TEXT DEFAULT '', generation INTEGER DEFAULT 1, handover_after INTEGER DEFAULT 0, idle_timeout INTEGER DEFAULT 0)");
+    this.state.storage.sql.exec("CREATE TABLE IF NOT EXISTS runners (runner_id TEXT PRIMARY KEY, os TEXT NOT NULL, arch TEXT NOT NULL, repo TEXT DEFAULT '', tags_json TEXT DEFAULT '[]', status TEXT NOT NULL DEFAULT 'online', connected_at INTEGER NOT NULL, provider TEXT DEFAULT '', account TEXT DEFAULT '', expires_at INTEGER, handover_state TEXT DEFAULT 'none', predecessor_id TEXT DEFAULT '', successor_id TEXT DEFAULT '', generation INTEGER DEFAULT 1, duration_seconds INTEGER DEFAULT 0, handover_after INTEGER DEFAULT 0, idle_timeout INTEGER DEFAULT 0)");
     for (const column of [
       "provider TEXT DEFAULT ''",
       "account TEXT DEFAULT ''",
@@ -37,6 +37,7 @@ export class RegistryDO {
       "predecessor_id TEXT DEFAULT ''",
       "successor_id TEXT DEFAULT ''",
       "generation INTEGER DEFAULT 1",
+      "duration_seconds INTEGER DEFAULT 0",
       "handover_after INTEGER DEFAULT 0",
       "idle_timeout INTEGER DEFAULT 0"
     ]) {
@@ -132,7 +133,8 @@ export class RegistryDO {
     const account = String(input.account ?? "").trim() || tagValue(tags, "account:");
     const predecessorId = String(input.predecessor_id ?? "").trim();
     const generation = parseGeneration(input.generation, tags);
-    const durationSeconds = Number(input.duration_seconds ?? 0);
+    const durationSecondsRaw = Number(input.duration_seconds ?? 0);
+    const durationSeconds = Number.isFinite(durationSecondsRaw) && durationSecondsRaw > 0 ? Math.floor(durationSecondsRaw) : 0;
     const handoverAfter = Number.isInteger(Number(input.handover_after)) ? Number(input.handover_after) : 0;
     const idleTimeoutRaw = Number(input.idle_timeout ?? 0);
     const idleTimeout = Number.isFinite(idleTimeoutRaw) && idleTimeoutRaw > 0 ? Math.floor(idleTimeoutRaw) : 0;
@@ -141,7 +143,7 @@ export class RegistryDO {
       : (Number.isFinite(durationSeconds) && durationSeconds > 0 ? now + Math.floor(durationSeconds) * 1000 : null);
 
     this.state.storage.sql.exec(
-      "INSERT INTO runners(runner_id,os,arch,repo,tags_json,status,connected_at,provider,account,expires_at,handover_state,predecessor_id,successor_id,generation,handover_after,idle_timeout) VALUES(?,?,?,?,?,'online',?,?,?,?,'none',?,'',?,?,?) ON CONFLICT(runner_id) DO UPDATE SET os=excluded.os,arch=excluded.arch,repo=excluded.repo,tags_json=excluded.tags_json,status='online',connected_at=excluded.connected_at,provider=excluded.provider,account=excluded.account,expires_at=excluded.expires_at,handover_state='none',predecessor_id=excluded.predecessor_id,successor_id='',generation=excluded.generation,handover_after=excluded.handover_after,idle_timeout=excluded.idle_timeout",
+      "INSERT INTO runners(runner_id,os,arch,repo,tags_json,status,connected_at,provider,account,expires_at,handover_state,predecessor_id,successor_id,generation,duration_seconds,handover_after,idle_timeout) VALUES(?,?,?,?,?,'online',?,?,?,?,'none',?,'',?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET os=excluded.os,arch=excluded.arch,repo=excluded.repo,tags_json=excluded.tags_json,status='online',connected_at=excluded.connected_at,provider=excluded.provider,account=excluded.account,expires_at=excluded.expires_at,handover_state='none',predecessor_id=excluded.predecessor_id,successor_id='',generation=excluded.generation,duration_seconds=excluded.duration_seconds,handover_after=excluded.handover_after,idle_timeout=excluded.idle_timeout",
       input.runner_id,
       input.os,
       input.arch,
@@ -153,6 +155,7 @@ export class RegistryDO {
       expiresAt,
       predecessorId,
       generation,
+      durationSeconds,
       handoverAfter,
       idleTimeout
     );
@@ -262,6 +265,8 @@ export class RegistryDO {
       remaining_seconds: Number(input.remaining_seconds ?? 0),
       active_requests: Number(input.active_requests ?? 0),
       idle_seconds: Number(input.idle_seconds ?? 0),
+      ...((runner.duration_seconds ?? 0) > 0 ? { duration_seconds: runner.duration_seconds } : {}),
+      ...((runner.handover_after ?? 0) > 0 ? { handover_after: runner.handover_after } : {}),
       ...((runner.idle_timeout ?? 0) > 0 ? { idle_timeout: runner.idle_timeout } : {})
     };
 
@@ -497,6 +502,7 @@ export class RegistryDO {
       predecessor_id: row.predecessor_id ? String(row.predecessor_id) : null,
       successor_id: row.successor_id ? String(row.successor_id) : null,
       generation: Number(row.generation ?? 1) || 1,
+      duration_seconds: Number(row.duration_seconds ?? 0) || 0,
       handover_after: Number.isInteger(Number(row.handover_after)) ? Number(row.handover_after) : 0,
       idle_timeout: Number(row.idle_timeout ?? 0) || 0
     };

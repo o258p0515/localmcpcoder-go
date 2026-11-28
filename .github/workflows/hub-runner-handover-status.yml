@@ -1,0 +1,416 @@
+name: LocalMCP Hub Handover Status Tunnel
+run-name: Handover Status ${{ inputs.runner_name || 'handover-status' }} (g${{ inputs.generation || '1' }})
+on:
+  workflow_dispatch:
+    inputs:
+      runner_name:
+        description: "Unique runner name"
+        type: string
+        required: false
+        default: "handover-status"
+      runner_tags:
+        description: "Comma-separated runner tags"
+        type: string
+        required: false
+        default: "linux,go,gha,tunnel,handover5m"
+      duration_seconds:
+        description: "Runner lifetime in seconds (maximum 20400)"
+        type: number
+        required: true
+        default: 420
+      runner_os:
+        description: "GitHub-hosted runner operating system"
+        type: choice
+        required: true
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - linux
+      account_alias:
+        description: "RTDB account alias"
+        type: string
+        required: false
+        default: "personal"
+      predecessor_id:
+        description: "Predecessor runner ID during make-before-break handover"
+        type: string
+        required: false
+        default: ""
+      generation:
+        description: "Runner generation counter (1, 2, ...)"
+        type: string
+        required: false
+        default: "1"
+      handover_after:
+        description: "Seconds after start to request handover (300 = 5 minutes)"
+        type: string
+        required: false
+        default: "300"
+      idle_timeout:
+        description: "Seconds of inactivity before graceful exit (0 = disable)"
+        type: string
+        required: false
+        default: "0"
+permissions:
+  contents: read
+concurrency:
+  # Each generation runs independently so Make-Before-Break Gen N+1 never cancels Gen N.
+  group: localmcp-handover-status-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: go/go.mod
+      - name: Build Go Hub runner
+        working-directory: go
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -trimpath -o "$RUNNER_TEMP/localmcpcoder-mcp" ./cmd/mcp
+      - name: Install cloudflared
+        shell: bash
+        run: |
+          set -euo pipefail
+          CF_DL_BASE="https://github.com/cloudflare/cloudflared/releases/latest/download"
+          curl -fsSL "${CF_DL_BASE}/cloudflared-linux-amd64" -o "$RUNNER_TEMP/cloudflared"
+          chmod +x "$RUNNER_TEMP/cloudflared"
+          "$RUNNER_TEMP/cloudflared" --version
+      - name: Ensure fixed Cloudflare Named Tunnel and DNS
+        id: cf_tunnel
+        env:
+          CF_API_EMAIL: ${{ secrets.CF_API_EMAIL }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          SUBDOMAIN_PREFIX: handover-status
+          TUNNEL_NAME: localmcp-handover-status
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("fs");
+          const email = (process.env.CF_API_EMAIL || "").trim();
+          const key = (process.env.CF_API_KEY || "").trim();
+          const domain = (process.env.CF_DOMAIN || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+          const prefix = process.env.SUBDOMAIN_PREFIX || "handover-status";
+          const tunnelName = process.env.TUNNEL_NAME || "localmcp-handover-status";
+          if (!email || !key || !domain) throw new Error("CF_API_EMAIL, CF_API_KEY and CF_DOMAIN secrets are required.");
+
+          const apiBase = "https://" + "api.cloudflare.com/client/v4";
+          const localOrigin = "http" + "://127.0.0.1:8080";
+
+          async function cf(path, init = {}) {
+            const res = await fetch(apiBase + path, {
+              ...init,
+              headers: {
+                "X-Auth-Email": email,
+                "X-Auth-Key": key,
+                "Content-Type": "application/json",
+                ...(init.headers || {})
+              }
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+              throw new Error(`Cloudflare API ${path} failed (${res.status}): ` + JSON.stringify(data.errors || data));
+            }
+            return data.result;
+          }
+
+          (async () => {
+            const zones = await cf("/zones?per_page=50");
+            const zone = zones
+              .filter((z) => z.status === "active" && (domain === z.name || domain.endsWith("." + z.name)))
+              .sort((a, b) => b.name.length - a.name.length)[0];
+            if (!zone) throw new Error("No active Cloudflare zone found for CF_DOMAIN.");
+            const accountId = zone.account.id;
+            const hostname = `${prefix}.${zone.name}`;
+
+            const existing = await cf(`/accounts/${accountId}/cfd_tunnel?name=${encodeURIComponent(tunnelName)}&is_deleted=false`);
+            let tunnel = Array.isArray(existing) ? existing[0] : null;
+            if (!tunnel) {
+              tunnel = await cf(`/accounts/${accountId}/cfd_tunnel`, {
+                method: "POST",
+                body: JSON.stringify({ name: tunnelName, config_src: "cloudflare" })
+              });
+            }
+            const tunnelId = tunnel.id;
+
+            await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {
+              method: "PUT",
+              body: JSON.stringify({
+                config: {
+                  ingress: [
+                    { hostname, service: localOrigin },
+                    { service: "http_status:404" }
+                  ]
+                }
+              })
+            });
+
+            const dnsList = await cf(`/zones/${zone.id}/dns_records?type=CNAME&name=${encodeURIComponent(hostname)}`);
+            const cnameTarget = `${tunnelId}.cfargotunnel.com`;
+            if (Array.isArray(dnsList) && dnsList.length > 0) {
+              if (dnsList[0].content !== cnameTarget || !dnsList[0].proxied) {
+                await cf(`/zones/${zone.id}/dns_records/${dnsList[0].id}`, {
+                  method: "PUT",
+                  body: JSON.stringify({ type: "CNAME", name: hostname, content: cnameTarget, proxied: true, ttl: 1 })
+                });
+              }
+            } else {
+              await cf(`/zones/${zone.id}/dns_records`, {
+                method: "POST",
+                body: JSON.stringify({ type: "CNAME", name: hostname, content: cnameTarget, proxied: true, ttl: 1 })
+              });
+            }
+
+            const token = await cf(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/token`);
+            console.log(`::add-mask::${token}`);
+            fs.appendFileSync(process.env.GITHUB_ENV, `CF_TUNNEL_TOKEN=${token}\nPUBLIC_HOSTNAME=${hostname}\nTUNNEL_ID=${tunnelId}\n`);
+            console.log(`Fixed Cloudflare Tunnel ready: https://${hostname} (tunnel_id=${tunnelId})`);
+          })().catch((err) => {
+            console.error(err);
+            process.exit(1);
+          });
+          NODE
+      - name: Start status web app, fixed tunnel, and Hub runner
+        env:
+          HUB_URLS: ${{ secrets.HUB_URLS }}
+          MCP_TOKEN: ${{ secrets.MCP_TOKEN }}
+          TS_TRUST_CREDS: ${{ secrets.TS_TRUST_CREDS }}
+          TS_TAGS: ${{ secrets.TS_TAGS }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          LOCALMCP_RUNNER_NAME: ${{ inputs.runner_name || 'handover-status' }}
+          LOCALMCP_RUNNER_TAGS: ${{ inputs.runner_tags || 'linux,go,gha,tunnel,handover5m' }}
+          ACCOUNT_ALIAS: ${{ inputs.account_alias || 'personal' }}
+          DURATION_SECONDS: ${{ inputs.duration_seconds || '420' }}
+          PREDECESSOR_ID: ${{ inputs.predecessor_id }}
+          GENERATION: ${{ inputs.generation || '1' }}
+          HANDOVER_AFTER: ${{ inputs.handover_after || '300' }}
+          IDLE_TIMEOUT: ${{ inputs.idle_timeout || '0' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_FILE: hub-runner-handover-status.yml
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_NUMBER: ${{ github.run_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/mcp-root"
+          mkdir -p "$ROOT"
+          LOCALMCP_RUNNER_ID="${LOCALMCP_RUNNER_NAME:-handover-status}-${GITHUB_RUN_ID}"
+          META_TAGS="provider:github,os:linux,account:${ACCOUNT_ALIAS},run:${GITHUB_RUN_ID},name:${LOCALMCP_RUNNER_NAME:-handover-status},gen:${GENERATION}"
+          COMBINED_TAGS="${META_TAGS},${LOCALMCP_RUNNER_TAGS}"
+          if [[ ",$COMBINED_TAGS," != *",workflow:${WORKFLOW_FILE},"* ]]; then
+            COMBINED_TAGS="${COMBINED_TAGS},workflow:${WORKFLOW_FILE}"
+          fi
+          export LOCALMCP_RUNNER_ID COMBINED_TAGS
+          export PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo 'unknown')"
+
+          cat <<'EOF_SERVER' > "$RUNNER_TEMP/status-server.mjs"
+          import http from "node:http";
+          import os from "node:os";
+          import { execSync } from "node:child_process";
+
+          const startedAt = new Date();
+          function safeExec(cmd) {
+            try { return execSync(cmd, { encoding: "utf8", timeout: 2000 }).trim(); } catch { return "n/a"; }
+          }
+          const diskInfo = safeExec("df -h / | tail -n 1 | awk '{print $3 \" / \" $2 \" (\" $5 \")\"}'");
+          const kernelInfo = safeExec("uname -sr");
+          const cpus = os.cpus();
+          const cpuModel = cpus[0]?.model || "unknown";
+          const totalMemGb = (os.totalmem() / 1073741824).toFixed(2);
+
+          function buildPayload() {
+            const now = new Date();
+            const vnTime = new Intl.DateTimeFormat("vi-VN", {
+              timeZone: "Asia/Ho_Chi_Minh",
+              dateStyle: "short",
+              timeStyle: "medium"
+            }).format(now);
+            const startedVn = new Intl.DateTimeFormat("vi-VN", {
+              timeZone: "Asia/Ho_Chi_Minh",
+              dateStyle: "short",
+              timeStyle: "medium"
+            }).format(startedAt);
+            const uptimeSec = Math.floor((now.getTime() - startedAt.getTime()) / 1000);
+            const freeMemGb = (os.freemem() / 1073741824).toFixed(2);
+            const usedMemGb = ((os.totalmem() - os.freemem()) / 1073741824).toFixed(2);
+            const handoverAfter = Number(process.env.HANDOVER_AFTER || 300);
+            const nextHandoverIn = Math.max(0, handoverAfter - uptimeSec);
+            return {
+              status: "online",
+              time_vn: vnTime,
+              time_utc: now.toISOString(),
+              started_at_vn: startedVn,
+              uptime_seconds: uptimeSec,
+              next_handover_in_seconds: nextHandoverIn,
+              handover: {
+                generation: Number(process.env.GENERATION || 1),
+                runner_id: process.env.LOCALMCP_RUNNER_ID || "",
+                runner_name: process.env.LOCALMCP_RUNNER_NAME || "",
+                predecessor_id: process.env.PREDECESSOR_ID || "none",
+                handover_after_seconds: handoverAfter,
+                duration_seconds: Number(process.env.DURATION_SECONDS || 420),
+                tags: process.env.COMBINED_TAGS || ""
+              },
+              pipeline: {
+                provider: "GitHub Actions",
+                repository: process.env.GITHUB_REPOSITORY || "",
+                workflow_file: process.env.WORKFLOW_FILE || "",
+                workflow_name: process.env.WORKFLOW_NAME || "",
+                run_id: process.env.GITHUB_RUN_ID || "",
+                run_number: process.env.RUN_NUMBER || "",
+                run_url: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+              },
+              machine: {
+                hostname: os.hostname(),
+                public_ip: process.env.PUBLIC_IP || "unknown",
+                os: `${os.type()} ${os.release()} (${kernelInfo})`,
+                arch: os.arch(),
+                cpu_cores: cpus.length,
+                cpu_model: cpuModel,
+                memory_used_gb: usedMemGb,
+                memory_free_gb: freeMemGb,
+                memory_total_gb: totalMemGb,
+                disk_root: diskInfo,
+                load_avg: os.loadavg().map((n) => n.toFixed(2)).join(", ")
+              },
+              tunnel: {
+                public_url: `https://${process.env.PUBLIC_HOSTNAME || ""}`,
+                tunnel_id: process.env.TUNNEL_ID || ""
+              }
+            };
+          }
+
+          function renderHtml(d) {
+            return `<!doctype html>
+          <html lang="vi">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width,initial-scale=1" />
+            <meta http-equiv="refresh" content="10" />
+            <title>Gen ${d.handover.generation} - ${d.handover.runner_id}</title>
+            <style>
+              body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0d1117; color: #e6edf3; margin: 0; padding: 20px; line-height: 1.5; }
+              .wrap { max-width: 820px; margin: 0 auto; }
+              .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px 20px; margin-bottom: 14px; }
+              h1 { font-size: 20px; margin: 0 0 8px; color: #58a6ff; }
+              h2 { font-size: 14px; margin: 0 0 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+              .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: bold; background: #238636; color: #fff; font-size: 13px; margin-right: 8px; }
+              .gen { background: #1f6feb; }
+              table { width: 100%; border-collapse: collapse; font-size: 13px; }
+              td { padding: 6px 8px; border-bottom: 1px solid #21262d; vertical-align: top; }
+              td:first-child { color: #8b949e; width: 210px; }
+              a { color: #58a6ff; text-decoration: none; }
+              .muted { color: #8b949e; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="wrap">
+              <div class="card">
+                <span class="badge">ONLINE</span>
+                <span class="badge gen">GEN ${d.handover.generation}</span>
+                <h1>${d.handover.runner_id}</h1>
+                <div class="muted">URL cố định: <a href="${d.tunnel.public_url}">${d.tunnel.public_url}</a> | JSON API: <a href="/api/status">/api/status</a> | Tự refresh mỗi 10s</div>
+              </div>
+              <div class="card">
+                <h2>Thời gian &amp; Chu kỳ Handover (5 phút)</h2>
+                <table>
+                  <tr><td>Giờ hệ thống (VN +07)</td><td><strong>${d.time_vn}</strong></td></tr>
+                  <tr><td>Giờ UTC</td><td>${d.time_utc}</td></tr>
+                  <tr><td>Khởi động lúc (VN +07)</td><td>${d.started_at_vn}</td></tr>
+                  <tr><td>Uptime thế hệ này</td><td>${d.uptime_seconds}s</td></tr>
+                  <tr><td>Dự kiến kích hoạt Gen ${d.handover.generation + 1}</td><td>còn ~${d.next_handover_in_seconds}s (handover_after=${d.handover.handover_after_seconds}s, max=${d.handover.duration_seconds}s)</td></tr>
+                </table>
+              </div>
+              <div class="card">
+                <h2>Định danh Pipeline &amp; Runner</h2>
+                <table>
+                  <tr><td>Generation</td><td><strong>Gen ${d.handover.generation}</strong></td></tr>
+                  <tr><td>Runner ID</td><td><strong>${d.handover.runner_id}</strong></td></tr>
+                  <tr><td>Predecessor ID</td><td>${d.handover.predecessor_id}</td></tr>
+                  <tr><td>Runner Name</td><td>${d.handover.runner_name}</td></tr>
+                  <tr><td>Workflow / Pipeline</td><td>${d.pipeline.workflow_file} (${d.pipeline.provider})</td></tr>
+                  <tr><td>Pipeline Run ID</td><td><a href="${d.pipeline.run_url}" target="_blank">${d.pipeline.run_id}</a> (Run #${d.pipeline.run_number})</td></tr>
+                  <tr><td>Tags</td><td>${d.handover.tags}</td></tr>
+                </table>
+              </div>
+              <div class="card">
+                <h2>Máy chủ &amp; Cấu hình phần cứng</h2>
+                <table>
+                  <tr><td>Hostname</td><td><strong>${d.machine.hostname}</strong></td></tr>
+                  <tr><td>Public IP (VM outbound)</td><td>${d.machine.public_ip}</td></tr>
+                  <tr><td>Hệ điều hành</td><td>${d.machine.os} (${d.machine.arch})</td></tr>
+                  <tr><td>CPU</td><td>${d.machine.cpu_cores} vCPU — ${d.machine.cpu_model}</td></tr>
+                  <tr><td>RAM</td><td>${d.machine.memory_used_gb} GB / ${d.machine.memory_total_gb} GB (trống ${d.machine.memory_free_gb} GB)</td></tr>
+                  <tr><td>Ổ đĩa (/)</td><td>${d.machine.disk_root}</td></tr>
+                  <tr><td>Load Average</td><td>${d.machine.load_avg}</td></tr>
+                </table>
+              </div>
+            </div>
+          </body>
+          </html>`;
+          }
+
+          const server = http.createServer((req, res) => {
+            const payload = buildPayload();
+            const commonHeaders = {
+              "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+              "Pragma": "no-cache"
+            };
+            if (req.url && req.url.startsWith("/api/status")) {
+              res.writeHead(200, { ...commonHeaders, "Content-Type": "application/json; charset=utf-8" });
+              res.end(JSON.stringify(payload, null, 2));
+              return;
+            }
+            res.writeHead(200, { ...commonHeaders, "Content-Type": "text/html; charset=utf-8" });
+            res.end(renderHtml(payload));
+          });
+          server.listen(8080, "127.0.0.1", () => console.log("Status server listening on port 8080"));
+          EOF_SERVER
+
+          node "$RUNNER_TEMP/status-server.mjs" &
+          WEB_PID=$!
+
+          "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate run --token "$CF_TUNNEL_TOKEN" >/tmp/cloudflared.log 2>&1 &
+          CF_PID=$!
+
+          cleanup() {
+            echo "Shutting down status web server and Cloudflare tunnel..."
+            kill "$CF_PID" "$WEB_PID" 2>/dev/null || true
+            wait "$CF_PID" "$WEB_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          echo "::add-mask::$HUB_URLS"
+          echo "Starting runner $LOCALMCP_RUNNER_ID (gen=$GENERATION, predecessor=${PREDECESSOR_ID:-none}) with fixed URL https://${PUBLIC_HOSTNAME}"
+          EXTRA_ARGS=(
+            --duration-seconds "$DURATION_SECONDS"
+            --handover-after "$HANDOVER_AFTER"
+            --idle-timeout "$IDLE_TIMEOUT"
+            --generation "$GENERATION"
+          )
+          if [ -n "$PREDECESSOR_ID" ]; then
+            EXTRA_ARGS+=(--predecessor-id "$PREDECESSOR_ID")
+          fi
+          set +e
+          timeout --signal=TERM --kill-after=40s "${DURATION_SECONDS}s" \
+            "$RUNNER_TEMP/localmcpcoder-mcp" --root "$ROOT" --tunnel hub \
+            --hub-urls "$HUB_URLS" \
+            --runner-id "$LOCALMCP_RUNNER_ID" --runner-tags "$COMBINED_TAGS" \
+            "${EXTRA_ARGS[@]}"
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 124 ] || [ "$STATUS" -eq 143 ]; then
+            echo "Planned runner lifetime ended; SIGTERM graceful drain completed."
+            exit 0
+          fi
+          exit "$STATUS"
